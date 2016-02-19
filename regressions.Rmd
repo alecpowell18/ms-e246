@@ -1,6 +1,6 @@
 ---
 title: "MS&E246Project"
-author: "Alec Powell"
+author: "Alec Powell, Frank Fang, Cam Najmabadi"
 date: "January 29, 2016"
 output: html_document
 ---
@@ -15,12 +15,107 @@ mydata <- read.csv("SBA_Loan_data.csv")
 # Making new column boolean for default status
 mydata$defaulted <- mydata$GrossChargeOffAmount > 0
 
-#Calculating overall percentage of loans defaulted (in progress)
-sum(!mydata$defaulted)
+#take out status=EXEMPT and status=CANCLD
+mydata <- subset(mydata, LoanStatus!="EXEMPT"&LoanStatus!="CANCLD"&!is.na(BusinessType))
 
+
+#Calculating overall percentage of loans defaulted (in progress)
+sum(!mydata$defaulted)/nrow(mydata)
+
+#Calcluate percentage of loans defaulted by state
+## which states have the most defaults?
+state_v_default <- xtabs(~ BorrState + defaulted, data = mydata)
+state_v_default <- as.data.frame.matrix(state_v_default)
+state_v_default[-1,]
+state_v_default$percentage <- state_v_default[,2]/(state_v_default[,1]+state_v_default[,2]) 
+#only_defaults <- mydata[which(mydata$GrossChargeOffAmount > 0),]
+#frank's old code
+# s <- table(only_defaults$ProjectState)
+# tot_state <- table(mydata$ProjectState)
+# s <- as.data.frame(s)
+# tot_state <- as.data.frame(tot_state)
+# names(s)[1] <- 'ProjectState'
+# s[2] <- s[2] / tot_state[2] ##proportion of projects per state that default on a loan
+# s<- s[order(-s$Freq),]
+```
+Now, onto years. Which years were the most defaults observed?
+(more text here)
+
+```{r}
+
+year_v_default <- xtabs(~ ApprovalFiscalYear + defaulted, data = mydata)
+year_v_default <- as.data.frame.matrix(year_v_default)
+year_v_default$percentage <- year_v_default[,2]/(year_v_default[,1]+year_v_default[,2]) 
+
+#high_default_years <- row.names(year_v_default[order(year_v_default$percentage, decreasing = TRUE)])
+
+#classifying/indicator based on business type
+b_type_table <- xtabs(~ BusinessType + defaulted, data = mydata)
+b_type_table <- as.data.frame.matrix(b_type_table)
+b_type_table$percentage <- b_type_table[,2]/(b_type_table[,1]+b_type_table[,2]) 
+
+#Make indicator variables
+top_10_default_states <- row.names(state_v_default[order(state_v_default$percentage,decreasing=T)[1:10],])
+top_10_default_years <- row.names(year_v_default[order(year_v_default$percentage,decreasing = T)[1:10],])
+mydata$badState <- mydata$BorrState %in% top_10_default_states
+mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
+
+
+#testing for linear and logistic?
+set.seed(1000)
+test_indices <- sample(147423,10000)
+test_X <- mydata[test_indices,]
+
+#go through and take out states that aren't as relevant (calc # of defaults per state)
+drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","ApprovalDate","ChargeOffDate","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode")
+
+test_X_pruned <- test_X[,!(names(test_X) %in% drops)]
+mydata_pruned <- mydata[,!(names(mydata) %in% drops)]
+
+
+#linear
+myvars <- names(test_X_pruned) %in% c("defaulted")
+lm.fit <- lm(GrossChargeOffAmount~., data = test_X_pruned[!myvars])
 # Multiple Linear Regression Example
-fit <- lm.fit(y ~ x1 + x2 + x3, data=mydata)
-summary(fit) # show results
+summary(lm.fit) # show results
+
+pairs(test_X_pruned)
+
+#medCrim = median(Boston$crim)
+#Boston$new_crim = as.numeric(Boston$crim >= medCrim)
+test_X <- test_X_pruned[test_indices,]
+train_X <- mydata_pruned[-test_indices,]
+glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_X, family = binomial)
+glm.probs <- predict.glm(glm.fit, newdata = train_X, type = "response")
+glm.pred <- as.numeric(glm.probs >= .5)
+
+```
+
+Now for some LDA, with an ROC curve hopefully:
+
+```{r}
+library(MASS)
+lda.fit = lda(defaulted~(GrossApproval+badState+badYear), data = train_X)
+
+lda.fit.predict = predict(lda.fit, newdata = test_X)
+lda.test.conf = table(lda.fit.predict$class, test_X$defaulted)
+print(lda.test.conf)
+lda.predict.ratio = (lda.test.conf[1,1]+lda.test.conf[2,2])/(lda.test.conf[1,1]+lda.test.conf[1,2]+lda.test.conf[2,1]+lda.test.conf[2,2])
+print(lda.predict.ratio)
+
+tpr <- lda.test.conf[2,2]/(lda.test.conf[2,2]+lda.test.conf[1,2])
+fpr <- lda.test.conf[1,2]/(lda.test.conf[1,2]+lda.test.conf[1,1])
+plot(fpr,tpr)
+
+```
+
+Lasso?
+
+```{r}
+library(glmnet)
+lasso.mod=glmnet(x[train_X,],y[train_X],alpha=1,lambda=grid)
+plot(lasso.mod)
+
 ```
 
 You can also embed plots, for example:
