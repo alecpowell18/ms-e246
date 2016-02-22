@@ -10,7 +10,6 @@ This is an R Markdown document. Markdown is a simple formatting syntax for autho
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
 ```{r}
-#mydata <- read.table("SBA_Loan_data.csv", header=TRUE, sep=",", fill=TRUE)
 mydata <- read.csv("SBA_Loan_data.csv")
 # Making new column boolean for default status
 mydata$defaulted <- mydata$GrossChargeOffAmount > 0
@@ -62,32 +61,45 @@ mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
 
 
 #testing for linear and logistic?
-set.seed(1000)
-test_indices <- sample(147423,10000)
-test_X <- mydata[test_indices,]
+set.seed(100)
+
+mixed.set <- mydata[sample(nrow(mydata)),]
+train <- mixed.set[1:38364,]
+test <- mixed.set[38365:54807,]
+
 
 #go through and take out states that aren't as relevant (calc # of defaults per state)
-drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","ApprovalDate","ChargeOffDate","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode")
+drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","ApprovalDate","ChargeOffDate","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
 
-test_X_pruned <- test_X[,!(names(test_X) %in% drops)]
-mydata_pruned <- mydata[,!(names(mydata) %in% drops)]
+train_pruned <- train[,!(names(train) %in% drops)]
+test_pruned <- test[,!(names(test) %in% drops)]
 
 
-#linear
-myvars <- names(test_X_pruned) %in% c("defaulted")
-lm.fit <- lm(GrossChargeOffAmount~., data = test_X_pruned[!myvars])
-# Multiple Linear Regression Example
-summary(lm.fit) # show results
+# Multiple Linear Regression (needs to get working!!!)
+myvars <- names(test_pruned) %in% c("defaulted")
+#lm.fit <- lm(GrossChargeOffAmount~., data = test_X_pruned[!myvars])
+#summary(lm.fit) # show results
 
 pairs(test_X_pruned)
 
-#medCrim = median(Boston$crim)
-#Boston$new_crim = as.numeric(Boston$crim >= medCrim)
-test_X <- test_X_pruned[test_indices,]
-train_X <- mydata_pruned[-test_indices,]
-glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_X, family = binomial)
-glm.probs <- predict.glm(glm.fit, newdata = train_X, type = "response")
-glm.pred <- as.numeric(glm.probs >= .5)
+# Logistic Regression
+
+glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_pruned, family = binomial)
+glm.probs <- predict.glm(glm.fit, newdata = test_pruned, type = "response")
+
+#confusion matrix--need to repeat over iterations every 0.05 increment in _classification_threshold_
+CLASSIFICATION_THRESHOLD = 0.1
+glm.pred = rep("No default",length(glm.probs))
+glm.pred [glm.probs > CLASSIFICATION_THRESHOLD] = "Yes-Default"
+glm.test.conf <- table(glm.pred, test_pruned$defaulted)
+
+glm.predict.ratio <- (glm.test.conf[1,1]+glm.test.conf[2,2])/(glm.test.conf[1,1]+glm.test.conf[1,2]+glm.test.conf[2,1]+glm.test.conf[2,2])
+
+#True postive and false positive rates (for ROC curve)
+glm.tpr <- glm.test.conf[2,2]/(glm.test.conf[2,2]+glm.test.conf[1,2])
+glm.fpr <- glm.test.conf[1,2]/(glm.test.conf[1,2]+glm.test.conf[1,1])
+
+plot(glm.fpr,glm.tpr)
 
 ```
 
@@ -95,17 +107,29 @@ Now for some LDA, with an ROC curve hopefully:
 
 ```{r}
 library(MASS)
-lda.fit = lda(defaulted~(GrossApproval+badState+badYear), data = train_X)
+lda.fit = lda(defaulted~(GrossApproval+badState+badYear), data = train_pruned)
 
-lda.fit.predict = predict(lda.fit, newdata = test_X)
-lda.test.conf = table(lda.fit.predict$class, test_X$defaulted)
+lda.fit.predict = predict(lda.fit, newdata = test_pruned, type = "response")
+#lda.pred = rep("No default",length(lda.fit.predict))
+#lda.pred [lda.fit.predict > CLASSIFICATION_THRESHOLD] = "Yes-Default"
+#lda.test.conf <- table(lda.pred, test_pruned$defaulted)
+
+lda.test.conf = table(lda.fit.predict$class, test_pruned$defaulted)
 print(lda.test.conf)
+
 lda.predict.ratio = (lda.test.conf[1,1]+lda.test.conf[2,2])/(lda.test.conf[1,1]+lda.test.conf[1,2]+lda.test.conf[2,1]+lda.test.conf[2,2])
 print(lda.predict.ratio)
 
-tpr <- lda.test.conf[2,2]/(lda.test.conf[2,2]+lda.test.conf[1,2])
-fpr <- lda.test.conf[1,2]/(lda.test.conf[1,2]+lda.test.conf[1,1])
-plot(fpr,tpr)
+lda.tpr <- lda.test.conf[2,2]/(lda.test.conf[2,2]+lda.test.conf[1,2])
+lda.fpr <- lda.test.conf[1,2]/(lda.test.conf[1,2]+lda.test.conf[1,1])
+plot(lda.fpr,lda.tpr)
+
+# number of predicted defaults:
+lda.pred.t = sum(lda.fit.predict$posterior[,2] >= CLASSIFICATION_THRESHOLD)
+# number of predicted non-defaults:
+lda.pred.f = sum(lda.fit.predict$posterior[,2] < CLASSIFICATION_THRESHOLD)
+print(lda.pred.t)
+print(lda.pred.f)
 
 ```
 
