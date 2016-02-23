@@ -75,16 +75,35 @@ train_pruned <- train[,!(names(train) %in% drops)]
 test_pruned <- test[,!(names(test) %in% drops)]
 
 
-# Multiple Linear Regression (needs to get working!!!)
+# Multiple Linear Regression
 myvars <- names(test_pruned) %in% c("defaulted")
-#lm.fit <- lm(GrossChargeOffAmount~., data = test_X_pruned[!myvars])
-#summary(lm.fit) # show results
+lm.fit <- lm(GrossChargeOffAmount~., data = test_pruned[!myvars])
+summary(lm.fit) # show results
 
-pairs(test_X_pruned)
+pairs(test_pruned)
+
+myvars_new <- names(train_pruned) %in% c("defaulted","DeliveryMethod","BusinessType")
+train_pruned_subset <- subset(train_pruned, select = !myvars_new)
+test_pruned_subset <- subset(test_pruned, select = !myvars_new)
+
+#Lasso??
+grid=10^seq(2,-2,length=100)
+#compute min lambda to use for lasso.train
+lasso.mod=cv.glmnet(as.matrix(train_pruned_subset),train_pruned$GrossChargeOffAmount,alpha=1,lambda=grid)
+plot(lasso.mod)
+
+#lasso.train=glmnet(as.matrix(train_pruned_subset),train_pruned$GrossChargeOffAmount,alpha=1,lambda=0.01)
+#plot(lasso.train$glmnet.fit)
+
+#doesn't work
+bestlam <- lasso.mod$lambda.min
+lasso.pred <- predict(lasso.mod,s=bestlam,newx=test_pruned)
+mse <-	mean((lasso.pred-y.test)^2)
+
 
 # Logistic Regression
 
-glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_pruned, family = binomial)
+glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_pruned, family = "binomial")
 glm.probs <- predict.glm(glm.fit, newdata = test_pruned, type = "response")
 
 #confusion matrix--need to repeat over iterations every 0.05 increment in _classification_threshold_
