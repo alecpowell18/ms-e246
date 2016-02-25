@@ -13,10 +13,33 @@ When you click the **Knit** button a document will be generated that includes bo
 mydata <- read.csv("SBA_Loan_data.csv")
 # Making new column boolean for default status
 mydata$defaulted <- mydata$GrossChargeOffAmount > 0
-
 #take out status=EXEMPT and status=CANCLD
 mydata <- subset(mydata, LoanStatus!="EXEMPT"&LoanStatus!="CANCLD"&!is.na(BusinessType))
 
+#Merge with Housing Price Index data from FHFA (works!)
+hpi_data <- read.table("HPI_PO_state.txt", header=TRUE, sep="\t")
+names(hpi_data)[names(hpi_data)=="index_sa"] <- "HousingPriceIndex"
+hpi.badcols <- c("Warning","index_nsa", "qtr")
+hpi_data <- subset(hpi_data, qtr==4)
+hpi_data <- hpi_data[,-which(names(hpi_data) %in% hpi.badcols)]
+mydata <- merge(x=mydata, y=hpi_data, by.x=c("BorrState","ApprovalFiscalYear"), by.y=c("state","yr"))
+
+#Merge with State Unemployment Rate data from BLS (not done yet)
+unemp_data <- read.table("State_level_unemployment_rate_Monthly.txt", header=TRUE, sep="\t")
+unemp_data_subset <- unemp_data[grep("-12-01", unemp_data$DATE), ]
+unemp_data_subset$DATE <- gsub("-12-01", "", unemp_data_subset$DATE)
+names(unemp_data_subset) <- gsub("UR","",names(unemp_data_subset))
+
+#TODO: SPLICE UNEMPLOYMENT RATE DATA INTO MYDATA TABLE
+#mydata$UnemploymentRate <- unemp_data_subset[mydata$ApprovalFiscalYear,mydata$BorrState]
+
+
+#Merge with Federal Funds Rate data from St. Louis Fed (works!)
+fedfunds_data <- read.csv("fredgraph.csv")
+fedfunds_data_subset <- fedfunds_data[grep("-12-01", fedfunds_data$observation_date),]
+fedfunds_data_subset$observation_date <- gsub("-12-01", "", fedfunds_data_subset$observation_date)
+fedfunds_data$year <- grep("([0-9]{4})^", fedfunds_data_subset$observation_date)
+mydata <- merge(x=mydata, y=fedfunds_data_subset, by.x="ApprovalFiscalYear", by.y="observation_date")
 
 #Calculating overall percentage of loans defaulted (in progress)
 sum(!mydata$defaulted)/nrow(mydata)
@@ -28,14 +51,6 @@ state_v_default <- as.data.frame.matrix(state_v_default)
 state_v_default[-1,]
 state_v_default$percentage <- state_v_default[,2]/(state_v_default[,1]+state_v_default[,2]) 
 #only_defaults <- mydata[which(mydata$GrossChargeOffAmount > 0),]
-#frank's old code
-# s <- table(only_defaults$ProjectState)
-# tot_state <- table(mydata$ProjectState)
-# s <- as.data.frame(s)
-# tot_state <- as.data.frame(tot_state)
-# names(s)[1] <- 'ProjectState'
-# s[2] <- s[2] / tot_state[2] ##proportion of projects per state that default on a loan
-# s<- s[order(-s$Freq),]
 ```
 Now, onto years. Which years were the most defaults observed?
 (more text here)
@@ -45,7 +60,6 @@ Now, onto years. Which years were the most defaults observed?
 year_v_default <- xtabs(~ ApprovalFiscalYear + defaulted, data = mydata)
 year_v_default <- as.data.frame.matrix(year_v_default)
 year_v_default$percentage <- year_v_default[,2]/(year_v_default[,1]+year_v_default[,2]) 
-
 #high_default_years <- row.names(year_v_default[order(year_v_default$percentage, decreasing = TRUE)])
 
 #classifying/indicator based on business type
@@ -58,7 +72,6 @@ top_10_default_states <- row.names(state_v_default[order(state_v_default$percent
 top_10_default_years <- row.names(year_v_default[order(year_v_default$percentage,decreasing = T)[1:10],])
 mydata$badState <- mydata$BorrState %in% top_10_default_states
 mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
-
 
 #testing for linear and logistic?
 set.seed(100)
@@ -73,7 +86,6 @@ drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","C
 
 train_pruned <- train[,!(names(train) %in% drops)]
 test_pruned <- test[,!(names(test) %in% drops)]
-
 
 # Multiple Linear Regression
 myvars <- names(test_pruned) %in% c("defaulted")
