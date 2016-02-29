@@ -1,20 +1,28 @@
 ---
 title: "MS&E246Project"
-author: "Alec Powell, Frank Fang, Cam Najmabadi"
-date: "January 29, 2016"
-output: html_document
+author: "Frank Fan, Matthew Kim, Cam Najmabadi, Alec Powell"
+date: "March 12, 2016"
+output: pdf_document
 ---
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Introduction
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+For this project, the objective was to compile data and form a predictive model for default and VaR of a set of Small Business Administration (SBA) loans from 1991-2014. In addition to the given data we have compiled various sets of data...
+
 
 ```{r}
 mydata <- read.csv("SBA_Loan_data.csv")
-# Making new column boolean for default status
+# Making new column for default status
 mydata$defaulted <- mydata$GrossChargeOffAmount > 0
 #take out status=EXEMPT and status=CANCLD
 mydata <- subset(mydata, LoanStatus!="EXEMPT"&LoanStatus!="CANCLD"&!is.na(BusinessType))
+#find loans where term is (not) yearly
+mydata$TermYearly <- mydata$TermInMonths%%12 == 0
+
+#find duplicate borrowers
+n_occur <- data.frame(table(mydata$BorrName))
+n_occur <- n_occur[n_occur$Freq > 1,]
+mydata$IsDuplicateBorrower <- mydata$BorrName %in% n_occur[,1]
 
 #Merge with Housing Price Index data from FHFA (works!)
 hpi_data <- read.table("HPI_PO_state.txt", header=TRUE, sep="\t")
@@ -24,32 +32,66 @@ hpi_data <- subset(hpi_data, qtr==4)
 hpi_data <- hpi_data[,-which(names(hpi_data) %in% hpi.badcols)]
 mydata <- merge(x=mydata, y=hpi_data, by.x=c("BorrState","ApprovalFiscalYear"), by.y=c("state","yr"))
 
-#Merge with State Unemployment Rate data from BLS (not done yet)
+#Merge with State Unemployment Rate data from BLS
 unemp_data <- read.table("State_level_unemployment_rate_Monthly.txt", header=TRUE, sep="\t")
 unemp_data_subset <- unemp_data[grep("-12-01", unemp_data$DATE), ]
 unemp_data_subset$DATE <- gsub("-12-01", "", unemp_data_subset$DATE)
 names(unemp_data_subset) <- gsub("UR","",names(unemp_data_subset))
 
-#TODO: SPLICE UNEMPLOYMENT RATE DATA INTO MYDATA TABLE
-#mydata$UnemploymentRate <- unemp_data_subset[mydata$ApprovalFiscalYear,mydata$BorrState]
-
+#splice unemployment rate data into mydata table (works)
+unemp_data_subset <- unemp_data_subset[,!(names(unemp_data_subset) %in% c("DATE"))]
+temp_table <- data.frame(matrix(NA, nrow = 2000, ncol = 3))
+i = 1
+for(yr in 1:nrow(unemp_data_subset)) {
+  for(st in names(unemp_data_subset)) {
+    temp_table[i, ] = c(yr+1975,st,unemp_data_subset[yr,st])
+    i=i+1
+  }
+}
+names(temp_table)[names(temp_table)=="X1"] <- "YR"
+names(temp_table)[names(temp_table)=="X2"] <- "ST"
+names(temp_table)[names(temp_table)=="X3"] <- "UnemploymentRate"
+mydata <- merge(x=mydata, y=temp_table, by.x=c("ApprovalFiscalYear","BorrState"), by.y=c("YR","ST"))
+mydata$UnemploymentRate <- as.numeric(mydata$UnemploymentRate)
 
 #Merge with Federal Funds Rate data from St. Louis Fed (works!)
 fedfunds_data <- read.csv("fredgraph.csv")
 fedfunds_data_subset <- fedfunds_data[grep("-12-01", fedfunds_data$observation_date),]
 fedfunds_data_subset$observation_date <- gsub("-12-01", "", fedfunds_data_subset$observation_date)
-fedfunds_data$year <- grep("([0-9]{4})^", fedfunds_data_subset$observation_date)
 mydata <- merge(x=mydata, y=fedfunds_data_subset, by.x="ApprovalFiscalYear", by.y="observation_date")
 
-#Calculating overall percentage of loans defaulted (in progress)
-sum(!mydata$defaulted)/nrow(mydata)
+#Merge with Median Household Income data from US Census Bureau (works!)
+household_income_data <- read.csv("medianhhincome.csv", header=TRUE)
+names(household_income_data) <- gsub("X","",names(household_income_data))
+household_mat <- as.matrix(household_income_data)
 
-#Calcluate percentage of loans defaulted by state
+temp_table <- data.frame(matrix(NA, nrow = 1250, ncol = 3))
+i = 1
+for(yr in 2:ncol(household_mat)) {
+  for(st in 1:nrow(household_mat)-1) {
+    temp_table[i, ] = c(2016-yr,household_mat[st,1],as.integer(gsub(",","",household_mat[st,yr])))
+    i=i+1
+  }
+}
+names(temp_table)[names(temp_table)=="X1"] <- "YR"
+names(temp_table)[names(temp_table)=="X2"] <- "ST"
+names(temp_table)[names(temp_table)=="X3"] <- "HouseholdIncome"
+mydata <- merge(x=mydata, y=temp_table, by.x=c("ApprovalFiscalYear","BorrState"), by.y=c("YR","ST"))
+mydata$HouseholdIncome <- as.numeric(mydata$HouseholdIncome)
+
+#Merge data with S&P returns, VIX level, 3-month and 10-month T-bill
+sp_data <- read.csv("SP-data.csv")
+mydata <- merge(x=mydata, y=sp_data, by.x="ApprovalFiscalYear", by.y="Year")
+
+#Calculating overall percentage of loans defaulted
+#sum(!mydata$defaulted)/nrow(mydata)
+
 ## which states have the most defaults?
-state_v_default <- xtabs(~ BorrState + defaulted, data = mydata)
-state_v_default <- as.data.frame.matrix(state_v_default)
-state_v_default[-1,]
-state_v_default$percentage <- state_v_default[,2]/(state_v_default[,1]+state_v_default[,2]) 
+#Calcluate percentage of loans defaulted by state
+#state_v_default <- xtabs(~ BorrState + defaulted, data = mydata)
+#state_v_default <- as.data.frame.matrix(state_v_default)
+#state_v_default[-1,]
+#state_v_default$percentage <- state_v_default[,2]/(state_v_default[,1]+state_v_default[,2]) 
 #only_defaults <- mydata[which(mydata$GrossChargeOffAmount > 0),]
 ```
 Now, onto years. Which years were the most defaults observed?
@@ -57,68 +99,54 @@ Now, onto years. Which years were the most defaults observed?
 
 ```{r}
 
-year_v_default <- xtabs(~ ApprovalFiscalYear + defaulted, data = mydata)
-year_v_default <- as.data.frame.matrix(year_v_default)
-year_v_default$percentage <- year_v_default[,2]/(year_v_default[,1]+year_v_default[,2]) 
-#high_default_years <- row.names(year_v_default[order(year_v_default$percentage, decreasing = TRUE)])
+#year_v_default <- xtabs(~ ApprovalFiscalYear + defaulted, data = mydata)
+#year_v_default <- as.data.frame.matrix(year_v_default)
+#year_v_default$percentage <- year_v_default[,2]/(year_v_default[,1]+year_v_default[,2]) 
 
 #classifying/indicator based on business type
 b_type_table <- xtabs(~ BusinessType + defaulted, data = mydata)
 b_type_table <- as.data.frame.matrix(b_type_table)
 b_type_table$percentage <- b_type_table[,2]/(b_type_table[,1]+b_type_table[,2]) 
 
-#Make indicator variables
-top_10_default_states <- row.names(state_v_default[order(state_v_default$percentage,decreasing=T)[1:10],])
-top_10_default_years <- row.names(year_v_default[order(year_v_default$percentage,decreasing = T)[1:10],])
-mydata$badState <- mydata$BorrState %in% top_10_default_states
-mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
+#Make indicator variables for top 10 default years, top 10 default states
+#top_10_default_states <- row.names(state_v_default[order(state_v_default$percentage,decreasing=T)[1:10],])
+#top_10_default_years <- row.names(year_v_default[order(year_v_default$percentage,decreasing = T)[1:10],])
+#mydata$badState <- mydata$BorrState %in% top_10_default_states
+#mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
 
+```
+Now we divide the data into train/test sets and set up for testing different models.
+
+```{r}
 #testing for linear and logistic?
 set.seed(100)
 
 mixed.set <- mydata[sample(nrow(mydata)),]
-train <- mixed.set[1:38364,]
+train <- mixed.set[1:37397,]
 test <- mixed.set[38365:54807,]
 
-
-#go through and take out states that aren't as relevant (calc # of defaults per state)
+#uninteresting variables not used in our model analysis
 drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","ApprovalDate","ChargeOffDate","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
 
 train_pruned <- train[,!(names(train) %in% drops)]
 test_pruned <- test[,!(names(test) %in% drops)]
 
-# Multiple Linear Regression
+# Multiple Linear Regression, first attempt
 myvars <- names(test_pruned) %in% c("defaulted")
 lm.fit <- lm(GrossChargeOffAmount~., data = test_pruned[!myvars])
 summary(lm.fit) # show results
 
-pairs(test_pruned)
+#pairs(test_pruned)
 
 myvars_new <- names(train_pruned) %in% c("defaulted","DeliveryMethod","BusinessType")
 train_pruned_subset <- subset(train_pruned, select = !myvars_new)
 test_pruned_subset <- subset(test_pruned, select = !myvars_new)
 
-#Lasso??
-grid=10^seq(2,-2,length=100)
-#compute min lambda to use for lasso.train
-lasso.mod=cv.glmnet(as.matrix(train_pruned_subset),train_pruned$GrossChargeOffAmount,alpha=1,lambda=grid)
-plot(lasso.mod)
-
-#lasso.train=glmnet(as.matrix(train_pruned_subset),train_pruned$GrossChargeOffAmount,alpha=1,lambda=0.01)
-#plot(lasso.train$glmnet.fit)
-
-#doesn't work
-bestlam <- lasso.mod$lambda.min
-lasso.pred <- predict(lasso.mod,s=bestlam,newx=test_pruned)
-mse <-	mean((lasso.pred-y.test)^2)
-
-
 # Logistic Regression
-
 glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_pruned, family = "binomial")
 glm.probs <- predict.glm(glm.fit, newdata = test_pruned, type = "response")
 
-#confusion matrix--need to repeat over iterations every 0.05 increment in _classification_threshold_
+#confusion matrix
 CLASSIFICATION_THRESHOLD = 0.1
 glm.pred = rep("No default",length(glm.probs))
 glm.pred [glm.probs > CLASSIFICATION_THRESHOLD] = "Yes-Default"
@@ -134,11 +162,210 @@ plot(glm.fpr,glm.tpr)
 
 ```
 
-Now for some LDA, with an ROC curve hopefully:
+AUC Code from Frank
 
 ```{r}
+
+install.packages("ROCR")
+library(glmnet)
+library(ROCR)
+grid=10^seq(2,-2,length=100)
+CLASSIFICATION_THRESHOLD = 0.5
+
+
+  #take out the dependent variable
+  indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
+  train_indep <- train_pruned[, indepVars]
+  test_indep <- test_pruned[, indepVars]
+  
+  #lasso logistic regression; k fold cross validation
+  log.reg.l1 <- cv.glmnet(data.matrix(train_indep),
+                       train_pruned$defaulted,
+                       family="binomial", lambda = grid)
+  
+  # Plotting binomial deviance vs log lambda
+  plot(log.reg.l1)
+
+  # Plot the AUC vs log lambda
+  glmnet_train_AUC <- cv.glmnet(data.matrix(train_indep),
+                           train_pruned$defaulted,
+                           family="binomial",
+                           type.measure="auc", lambda = grid)
+  plot(glmnet_train_AUC)
+  
+  
+  #Statistics on Training data
+  
+  #choose the optimal lambda,
+  #obtain the performance statistics
+  train.phat <- predict(log.reg.l1,
+                  newx=data.matrix(train_indep),
+                  s="lambda.min")
+  train.pred <- prediction(train.phat, train_pruned$defaulted)
+  #plot ROC
+  train.roc <- performance(train.pred, measure = "tpr", x.measure = "fpr")
+  plot(train.roc,colorize=FALSE, col="black") # plot ROC curve
+  lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+  # obtain the optimal cutoff point for threshold:
+  # the point closest to the TPR of (1) and FPR of (0)
+  train.min.cost = performance(train.pred, measure = "cost")
+  
+  #WHAT??????
+  train.pred@cutoffs[[1]][which.min(train.min.cost@y.values[[1]])]
+  
+  
+  #Statistics on Test data
+  
+  # Form predictions on test data
+  test.phat <- predict(log.reg.l1,
+                  newx=data.matrix(test_indep),
+                  s="lambda.min")
+  test.pred <- prediction(test.phat, test_pruned$defaulted)
+  # Obtain performance statistics
+  # Plot ROC
+  test.roc <- performance(test.pred, measure = "tpr", x.measure = "fpr")
+  plot(test.roc,colorize=FALSE, col="black")
+  lines(c(0,1),c(0,1),col = "gray", lty = 4 )  
+
+
+#set up logistic regression
+glmIndepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount"))
+glm_train_indep <- train_pruned[,glmIndepVars]
+glm_test_indep <- test_pruned[,glmIndepVars]
+glm.fit <- glm(defaulted~., data = glm_train_indep, family = binomial)
+glm.probs <- predict.glm(glm.fit, newdata = glm_train_indep, type = "response")
+glm.train.pred <- prediction(glm.probs, train_pruned$defaulted)
+
+# get statistics on the model
+
+#roc
+glm.train.perf <- performance(glm.train.pred, measure = "tpr", x.measure = "fpr")
+plot(glm.train.perf,colorize=FALSE, col="black") # plot ROC curve
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+#accuracy
+glm.train.err <- performance(glm.train.pred, measure = "err")
+plot(glm.train.err, col = "red")
+glm.train.fpr <- performance(glm.train.pred, measure = "fpr")
+plot(glm.train.fpr, add=TRUE, col = "green")
+glm.train.fnr <- performance(glm.train.pred, measure = "fnr")
+plot(glm.train.fnr, add=TRUE, col = "blue")
+
+
+glm.test.probs <- predict.glm(glm.fit, newdata = glm_test_indep, type = "response")
+glm.test.pred <- prediction(glm.test.probs, test_pruned$defaulted)
+
+glm.test.err <- performance(glm.test.pred, measure = "err")
+plot(glm.test.err, col = "black", xlim=c(0,.5), xlab = "Threshold")
+glm.test.fpr <- performance(glm.test.pred, measure = "fpr")
+plot(glm.test.fpr, add=TRUE, col = "red", lty = 3)
+glm.test.fnr <- performance(glm.test.pred, measure = "fnr")
+plot(glm.test.fnr, add=TRUE, col = "blue", lty=2)
+
+legend("top", cex = .5,
+       c("Total Error Rate","False Positive Rate","False Negative Rate"),
+       lty=c(1,1,1), # gives the legend appropriate symbols (lines)
+       lwd=c(2.5,2.5,2.5),col=c("black","red","blue"))
+
+```
+
+Bootstrapping!
+```{r}
+
+#make indicator variables for delivery method, business type
+#using glm_train_indep
+glm_train_indep$is504 <- glm_train_indep$DeliveryMethod == "504"
+glm_train_indep$isPCLP <- glm_train_indep$DeliveryMethod == "PCLP"
+glm_train_indep$isALP <- glm_train_indep$DeliveryMethod == "ALP"
+glm_train_indep$isRefi <- glm_train_indep$DeliveryMethod == "504REFI"
+n_occur_temp <- data.frame(table(glm_train_indep$DeliveryMethod))
+glm_train_indep$isIndiv <- glm_train_indep$BusinessType == "INDIVIDUAL"
+glm_train_indep$isPartnership <- glm_train_indep$BusinessType == "PARTNERSHIP"
+glm_train_indep$isCorp <- glm_train_indep$BusinessType == "CORPORATION"
+#take out non-numeric columns
+boot_drops <- c("DeliveryMethod","BusinessType")
+glm_train_indep <- glm_train_indep[,!(names(glm_train_indep) %in% boot_drops)]
+
+
+# Bootstrap 95% CI for regression coefficients 
+library(boot)
+# function to obtain regression weights 
+bs <- function(formula, data, indices) {
+  d <- data[indices,] # allows boot to select sample 
+  fit <- lm(formula, data=d)
+  return(coef(fit))
+} 
+# bootstrapping with 1000 replications 
+results <- boot(data=glm_train_indep, statistic=bs, 
+  	R=1000, formula=defaulted~HousingPriceIndex+FEDFUNDS+UnemploymentRate)
+
+# view results
+results
+plot(results, index=1) # intercept 
+plot(results, index=2) # HPI
+plot(results, index=3) # FEDFUNDS
+plot(results, index=4) # UnemploymentRate
+
+# get 95% confidence intervals 
+boot.ci(results, conf = 0.95, type=c("norm","perc"), index=1) # intercept
+boot.ci(results, conf = 0.95, type=c("norm","perc"), index=2) # HPI
+boot.ci(results, conf = 0.95, type=c("norm","perc"), index=3) # FEDFUNDS
+boot.ci(results, conf = 0.95, type=c("norm","perc"), index=4) # Unemployment
+
+
+# calculating VaR (does not work)
+ValueAtRisk.boot = function(x, idx, p=0.05, w=100000) {
+# x     data to be resampled
+# idx       vector of scrambled indices created by boot() function
+# p       probability value for VaR calculation
+# w       value of initial investment
+# value:
+# ans       Value-at-Risk computed using resampled data
+
+    q = mean(x[idx,]) + sd(x[idx,])*qnorm(p)
+    VaR = (exp(q) - 1)*w
+    VaR
+}
+
+VaR.boot = boot(glm_train_indep, statistic = ValueAtRisk.boot, R=999)
+VaR.boot
+plot(VaR.boot)
+
+```
+
+
+//Other
+```{r}
+
+## Fit logistic regression
+resLogit <- glm(formula = default ~ scale(balance) + scale(income),
+                family  = binomial(link = "logit"),
+                data    = Default)
+## Show the result
+summary(resLogit)
+
+```
+
+//Misc
+```{r}
+#Testing some qq plots for normality
+qqnorm(log(mydata$GrossApproval))
+qqline(log(mydata$GrossApproval))
+
+qqnorm(log(mydata$UnemploymentRate))
+qqline(log(mydata$UnemploymentRate))
+
+```
+
+Now for some LDA, with an ROC curve:
+
+```{r}
+CLASSIFICATION_THRESHOLD = 0.5
 library(MASS)
-lda.fit = lda(defaulted~(GrossApproval+badState+badYear), data = train_pruned)
+#lda.fit = lda(defaulted~log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = train_pruned)
+lda.fit = qda(defaulted~., data = train_pruned)
+
 
 lda.fit.predict = predict(lda.fit, newdata = test_pruned, type = "response")
 #lda.pred = rep("No default",length(lda.fit.predict))
@@ -150,6 +377,7 @@ print(lda.test.conf)
 
 lda.predict.ratio = (lda.test.conf[1,1]+lda.test.conf[2,2])/(lda.test.conf[1,1]+lda.test.conf[1,2]+lda.test.conf[2,1]+lda.test.conf[2,2])
 print(lda.predict.ratio)
+
 
 lda.tpr <- lda.test.conf[2,2]/(lda.test.conf[2,2]+lda.test.conf[1,2])
 lda.fpr <- lda.test.conf[1,2]/(lda.test.conf[1,2]+lda.test.conf[1,1])
@@ -164,19 +392,5 @@ print(lda.pred.f)
 
 ```
 
-Lasso?
-
-```{r}
-library(glmnet)
-lasso.mod=glmnet(x[train_X,],y[train_X],alpha=1,lambda=grid)
-plot(lasso.mod)
-
-```
-
-You can also embed plots, for example:
-
-```{r, echo=FALSE}
-plot(cars)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+CONCLUSION:
+///
