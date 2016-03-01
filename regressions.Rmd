@@ -83,6 +83,10 @@ mydata$HouseholdIncome <- as.numeric(mydata$HouseholdIncome)
 sp_data <- read.csv("SP-data.csv")
 mydata <- merge(x=mydata, y=sp_data, by.x="ApprovalFiscalYear", by.y="Year")
 
+#Merge data with additional data from Cameron's research:
+addl_data <- read.csv("Addl_Data_Selected.csv")
+mydata <- merge(x=mydata, y=addl_data, by.x="ApprovalFiscalYear", by.y="Year")
+
 #Calculating overall percentage of loans defaulted
 #sum(!mydata$defaulted)/nrow(mydata)
 
