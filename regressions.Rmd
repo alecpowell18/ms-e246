@@ -9,7 +9,7 @@ Introduction
 
 For this project, the objective was to compile data and form a predictive model for default and VaR of a set of Small Business Administration (SBA) loans from 1991-2014. In addition to the given data we have compiled various sets of data...
 
-
+Make/merge datasets
 ```{r}
 mydata <- read.csv("SBA_Loan_data.csv")
 # Making new column for default status
@@ -85,6 +85,17 @@ mydata <- merge(x=mydata, y=sp_data, by.x="ApprovalFiscalYear", by.y="Year")
 
 #Merge data with additional data from Cameron's research:
 addl_data <- read.csv("Addl_Data_Selected.csv")
+
+addl_data$Euro.USD <- NULL
+addl_data$X10.yrSwap <- NULL
+addl_data$Case.Shiller <- NULL
+
+##CREATE DUMMY VARIABLES TO INDICATE MISSING DATA. OR ELSE
+addl_data$StockMktTurnover_China <- NULL
+addl_data$BAML_HY_Adj_Sprd <- NULL
+addl_data$DisposableIncome <- NULL
+
+
 mydata <- merge(x=mydata, y=addl_data, by.x="ApprovalFiscalYear", by.y="Year")
 
 #Calculating overall percentage of loans defaulted
@@ -99,7 +110,6 @@ mydata <- merge(x=mydata, y=addl_data, by.x="ApprovalFiscalYear", by.y="Year")
 #only_defaults <- mydata[which(mydata$GrossChargeOffAmount > 0),]
 ```
 Now, onto years. Which years were the most defaults observed?
-(more text here)
 
 ```{r}
 
@@ -108,9 +118,9 @@ Now, onto years. Which years were the most defaults observed?
 #year_v_default$percentage <- year_v_default[,2]/(year_v_default[,1]+year_v_default[,2]) 
 
 #classifying/indicator based on business type
-b_type_table <- xtabs(~ BusinessType + defaulted, data = mydata)
-b_type_table <- as.data.frame.matrix(b_type_table)
-b_type_table$percentage <- b_type_table[,2]/(b_type_table[,1]+b_type_table[,2]) 
+#b_type_table <- xtabs(~ BusinessType + defaulted, data = mydata)
+#b_type_table <- as.data.frame.matrix(b_type_table)
+#b_type_table$percentage <- b_type_table[,2]/(b_type_table[,1]+b_type_table[,2]) 
 
 #Make indicator variables for top 10 default years, top 10 default states
 #top_10_default_states <- row.names(state_v_default[order(state_v_default$percentage,decreasing=T)[1:10],])
@@ -119,6 +129,7 @@ b_type_table$percentage <- b_type_table[,2]/(b_type_table[,1]+b_type_table[,2])
 #mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
 
 ```
+
 Now we divide the data into train/test sets and set up for testing different models.
 
 ```{r}
@@ -126,8 +137,8 @@ Now we divide the data into train/test sets and set up for testing different mod
 set.seed(100)
 
 mixed.set <- mydata[sample(nrow(mydata)),]
-train <- mixed.set[1:37397,]
-test <- mixed.set[38365:54807,]
+train <- mixed.set[1:37346,]
+test <- mixed.set[38346:53352,]
 
 #uninteresting variables not used in our model analysis
 drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","ApprovalDate","ChargeOffDate","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
@@ -146,9 +157,10 @@ myvars_new <- names(train_pruned) %in% c("defaulted","DeliveryMethod","BusinessT
 train_pruned_subset <- subset(train_pruned, select = !myvars_new)
 test_pruned_subset <- subset(test_pruned, select = !myvars_new)
 
-# Logistic Regression
+# Logistic Regression 3/2 works well
 glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_pruned, family = "binomial")
 glm.probs <- predict.glm(glm.fit, newdata = test_pruned, type = "response")
+summary(glm.fit)
 
 #confusion matrix
 CLASSIFICATION_THRESHOLD = 0.1
@@ -170,73 +182,38 @@ AUC Code from Frank
 
 ```{r}
 
-install.packages("ROCR")
 library(glmnet)
 library(ROCR)
 grid=10^seq(2,-2,length=100)
-CLASSIFICATION_THRESHOLD = 0.5
-
-
-  #take out the dependent variable
-  indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
-  train_indep <- train_pruned[, indepVars]
-  test_indep <- test_pruned[, indepVars]
-  
-  #lasso logistic regression; k fold cross validation
-  log.reg.l1 <- cv.glmnet(data.matrix(train_indep),
-                       train_pruned$defaulted,
-                       family="binomial", lambda = grid)
-  
-  # Plotting binomial deviance vs log lambda
-  plot(log.reg.l1)
-
-  # Plot the AUC vs log lambda
-  glmnet_train_AUC <- cv.glmnet(data.matrix(train_indep),
-                           train_pruned$defaulted,
-                           family="binomial",
-                           type.measure="auc", lambda = grid)
-  plot(glmnet_train_AUC)
-  
-  
-  #Statistics on Training data
-  
-  #choose the optimal lambda,
-  #obtain the performance statistics
-  train.phat <- predict(log.reg.l1,
-                  newx=data.matrix(train_indep),
-                  s="lambda.min")
-  train.pred <- prediction(train.phat, train_pruned$defaulted)
-  #plot ROC
-  train.roc <- performance(train.pred, measure = "tpr", x.measure = "fpr")
-  plot(train.roc,colorize=FALSE, col="black") # plot ROC curve
-  lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-
-  # obtain the optimal cutoff point for threshold:
-  # the point closest to the TPR of (1) and FPR of (0)
-  train.min.cost = performance(train.pred, measure = "cost")
-  
-  #WHAT??????
-  train.pred@cutoffs[[1]][which.min(train.min.cost@y.values[[1]])]
-  
-  
-  #Statistics on Test data
-  
-  # Form predictions on test data
-  test.phat <- predict(log.reg.l1,
-                  newx=data.matrix(test_indep),
-                  s="lambda.min")
-  test.pred <- prediction(test.phat, test_pruned$defaulted)
-  # Obtain performance statistics
-  # Plot ROC
-  test.roc <- performance(test.pred, measure = "tpr", x.measure = "fpr")
-  plot(test.roc,colorize=FALSE, col="black")
-  lines(c(0,1),c(0,1),col = "gray", lty = 4 )  
-
 
 #set up logistic regression
 glmIndepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount"))
 glm_train_indep <- train_pruned[,glmIndepVars]
 glm_test_indep <- test_pruned[,glmIndepVars]
+
+#make indicator variables for delivery method, business type
+#using glm_train_indep
+glm_train_indep$is504 <- glm_train_indep$DeliveryMethod == "504"
+glm_train_indep$isPCLP <- glm_train_indep$DeliveryMethod == "PCLP"
+glm_train_indep$isALP <- glm_train_indep$DeliveryMethod == "ALP"
+glm_train_indep$isRefi <- glm_train_indep$DeliveryMethod == "504REFI"
+n_occur_temp <- data.frame(table(glm_train_indep$DeliveryMethod))
+glm_train_indep$isIndiv <- glm_train_indep$BusinessType == "INDIVIDUAL"
+glm_train_indep$isPartnership <- glm_train_indep$BusinessType == "PARTNERSHIP"
+glm_train_indep$isCorp <- glm_train_indep$BusinessType == "CORPORATION"
+
+glm_test_indep$is504 <- glm_test_indep$DeliveryMethod == "504"
+glm_test_indep$isPCLP <- glm_test_indep$DeliveryMethod == "PCLP"
+glm_test_indep$isALP <- glm_test_indep$DeliveryMethod == "ALP"
+glm_test_indep$isRefi <- glm_test_indep$DeliveryMethod == "504REFI"
+glm_test_indep$isIndiv <- glm_test_indep$BusinessType == "INDIVIDUAL"
+glm_test_indep$isPartnership <- glm_test_indep$BusinessType == "PARTNERSHIP"
+glm_test_indep$isCorp <- glm_test_indep$BusinessType == "CORPORATION"
+#take out non-numeric columns
+boot_drops <- c("DeliveryMethod","BusinessType")
+glm_train_indep <- glm_train_indep[,!(names(glm_train_indep) %in% boot_drops)]
+glm_test_indep <- glm_test_indep[,!(names(glm_test_indep) %in% boot_drops)]
+
 glm.fit <- glm(defaulted~., data = glm_train_indep, family = binomial)
 glm.probs <- predict.glm(glm.fit, newdata = glm_train_indep, type = "response")
 glm.train.pred <- prediction(glm.probs, train_pruned$defaulted)
@@ -274,39 +251,59 @@ legend("top", cex = .5,
 
 ```
 
-Bootstrapping!
+stepwise model selection with logistic regression
+```{r}
+defaults.forward.stepwise <- step(glm(defaulted ~ 1, glm_train_indep, family = "binomial"),
+                                  list(upper = ~. + InterbankLoans:ConsumerLoans),
+                                  direction = "forward")
+
+defaults.glm <- glm(defaulted ~ ., glm_train_indep, family="binomial")
+
+defaults.backward.stepwise <- step(defaults.glm, direction = "backward")
+
+#This is the best subset:
+#ApprovalFiscalYear + GrossApproval + TermInMonths + HousingPriceIndex + HouseholdIncome + S.P500 + X3month + X10year + VIX + PublicDebt.GDP + X4_wkMAjobless_claims + RealGDPGrowth + TedRate + Velocity_M2_MS + ConsumerLoans + InterbankLoans + CPI_Index + InflationExpectation + isPCLP + isALP + isPartnership + isCorp + ConsumerLoans:InterbankLoans + InterbankLoans:ConsumerLoans
+
+summary(defaults.backward.stepwise)
+
+back.step.preds <- predict(defaults.backward.stepwise, glm_train_indep, type="response")
+back.step.prediction <- prediction(back.step.preds, glm_train_indep$defaulted)
+back.step.roc <- performance(back.step.prediction, measure = "tpr", x.measure = "fpr")
+plot(back.step.roc)
+back.step.auc <- performance(back.step.prediction, measure = "auc")
+back.step.auc@y.values
+
+back.step.test.preds <- predict(defaults.backward.stepwise, glm_test_indep, type="response")
+back.step.test.prediction <- prediction(back.step.test.preds, glm_test_indep$defaulted)
+back.step.test.roc <- performance(back.step.test.prediction, measure = "tpr", x.measure = "fpr")
+plot(back.step.test.roc)
+back.step.test.auc <- performance(back.step.test.prediction, measure = "auc")
+back.step.test.auc@y.values
+
+back.step.test.tpr <- performance(back.step.test.prediction, measure = "tpr")
+back.step.test.tpr@y.values
+```
+
+Bootstrapping (not really used yet)!
 ```{r}
 
-#make indicator variables for delivery method, business type
-#using glm_train_indep
-glm_train_indep$is504 <- glm_train_indep$DeliveryMethod == "504"
-glm_train_indep$isPCLP <- glm_train_indep$DeliveryMethod == "PCLP"
-glm_train_indep$isALP <- glm_train_indep$DeliveryMethod == "ALP"
-glm_train_indep$isRefi <- glm_train_indep$DeliveryMethod == "504REFI"
-n_occur_temp <- data.frame(table(glm_train_indep$DeliveryMethod))
-glm_train_indep$isIndiv <- glm_train_indep$BusinessType == "INDIVIDUAL"
-glm_train_indep$isPartnership <- glm_train_indep$BusinessType == "PARTNERSHIP"
-glm_train_indep$isCorp <- glm_train_indep$BusinessType == "CORPORATION"
-#take out non-numeric columns
-boot_drops <- c("DeliveryMethod","BusinessType")
-glm_train_indep <- glm_train_indep[,!(names(glm_train_indep) %in% boot_drops)]
-
-
-# Bootstrap 95% CI for regression coefficients 
+# Bootstrap 95% CI for regression coefficients (not needed?)
 library(boot)
 # function to obtain regression weights 
 bs <- function(formula, data, indices) {
-  d <- data[indices,] # allows boot to select sample 
+  d <- data[indices,] # allows boot to select sample
   fit <- lm(formula, data=d)
   return(coef(fit))
 } 
 # bootstrapping with 1000 replications 
+#results <- boot(data=glm_train_indep, statistic=bs, 
+#    R=1000, formula=defaulted~HousingPriceIndex+FEDFUNDS+UnemploymentRa#te)
 results <- boot(data=glm_train_indep, statistic=bs, 
-  	R=1000, formula=defaulted~HousingPriceIndex+FEDFUNDS+UnemploymentRate)
+  	R=1000, formula=defaulted~.)
 
 # view results
 results
-plot(results, index=1) # intercept 
+plot(results, index=1) # intercept
 plot(results, index=2) # HPI
 plot(results, index=3) # FEDFUNDS
 plot(results, index=4) # UnemploymentRate
@@ -317,59 +314,108 @@ boot.ci(results, conf = 0.95, type=c("norm","perc"), index=2) # HPI
 boot.ci(results, conf = 0.95, type=c("norm","perc"), index=3) # FEDFUNDS
 boot.ci(results, conf = 0.95, type=c("norm","perc"), index=4) # Unemployment
 
+```
 
-# calculating VaR (does not work)
-ValueAtRisk.boot = function(x, idx, p=0.05, w=100000) {
-# x     data to be resampled
-# idx       vector of scrambled indices created by boot() function
-# p       probability value for VaR calculation
-# w       value of initial investment
-# value:
-# ans       Value-at-Risk computed using resampled data
+3/2 from Frank
+```{r}
+library(glmnet)
+indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
+train_indep <- train_pruned[, indepVars]
+test_indep <- test_pruned[, indepVars]
+# Control randomness in Lasso CV fit
+set.seed(2123)
+# Produce a Lasso CV fit
+lasso.cv <- cv.glmnet(x=data.matrix(train_indep), y=train_pruned$defaulted, family = "binomial")
+plot(lasso.cv)
+# Use the 1 standard-error rule to pick lambda
+lambda_1se <- lasso.cv$lambda.1se
+#Print min lambda
+lambda_min <- lasso.cv$lambda.min
+```
 
-    q = mean(x[idx,]) + sd(x[idx,])*qnorm(p)
-    VaR = (exp(q) - 1)*w
-    VaR
+2) Next, we fit the Lasso to our full training set using this tuning parameter.
+```{r,eval=TRUE}
+# Extract the Lasso models fit to the full training set
+lasso.models <- lasso.cv$glmnet.fit 
+# Identify which model is associated with the selected tuning parameter
+selected.index <- which(lasso.models$lambda == lasso.cv$lambda.1se)
+# Display the predictors with non-zero coefficients in the selected model
+colnames(train_indep)[lasso.models$beta[,selected.index] != 0]
+```
+Happily, only a small number of coefficients are used by the model; this makes the result especially interpretable.
+
+3) Let's get the ROC curve for this model on the lambda we picked earlier!
+```{r}
+test.phat <- predict(lasso.cv,
+                  newx=data.matrix(test_indep),
+                  s="lambda.1se",
+                  type = "response")
+test.pred <- prediction(test.phat, test_pruned$defaulted)
+  # Obtain performance statistics
+  # Plot ROC
+  test.roc <- performance(test.pred, measure = "tpr", x.measure = "fpr")
+  plot(test.roc,colorize=FALSE, col="black")
+  lines(c(0,1),c(0,1),col = "gray", lty = 4 )  
+
+test.cost<- performance(test.pred, "cost")
+optimal_cutoff <- test.pred@cutoffs[[1]][which.min(test.cost@y.values[[1]])]
+```
+
+
+VaR calculations, (& bootstrap?)
+```{r}
+library(stats)
+
+lossVector <- vector()
+##1000 iterations to get loss distribution
+for(i in 1:1000) {
+  random_sample <- train_indep[sample(nrow(train_indep), 500), ]
+  #Using lasso
+  #random_sample.probs <- test.phat <- predict(lasso.cv,
+                  #newx=data.matrix(random_sample),
+                  #s="lambda.1se",
+                  #type = "response")
+  #Using logit
+  random_sample.probs <- predict.glm(glm.fit, newdata = random_sample, type = "response")
+  
+  random_sample.bin <- (random_sample.probs < optimal_cutoff)
+  all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
+  sample.defaults <- random_sample[ which(random_sample.bin =='TRUE'),]
+  total.loss <- sum(sample.defaults$GrossApproval)
+  lossVector[i] <- total.loss
+}
+#make histogram
+hist1 <- hist(lossVector)
+VaRhistorical(-lossVector)
+EShistorical(-lossVector)
+
+VaRhistorical <- function(returnVector, prob=.05, 
+    notional=1, digits=2) 
+{
+  if(prob > .5) prob <- 1 - prob
+  ans <- -quantile(returnVector, prob) * notional
+  signif(ans, digits=digits)
 }
 
-VaR.boot = boot(glm_train_indep, statistic = ValueAtRisk.boot, R=999)
-VaR.boot
-plot(VaR.boot)
+EShistorical <- function(returnVector, prob=.05, 
+    notional=1, digits=2) 
+{
+  if(prob > .5) prob <- 1 - prob
+  v <- quantile(returnVector, prob)
+  ans <- -mean(returnVector[returnVector <= v]) * 
+      notional
+  signif(ans, digits=digits)
+}
 
 ```
 
-
-//Other
-```{r}
-
-## Fit logistic regression
-resLogit <- glm(formula = default ~ scale(balance) + scale(income),
-                family  = binomial(link = "logit"),
-                data    = Default)
-## Show the result
-summary(resLogit)
-
-```
-
-//Misc
-```{r}
-#Testing some qq plots for normality
-qqnorm(log(mydata$GrossApproval))
-qqline(log(mydata$GrossApproval))
-
-qqnorm(log(mydata$UnemploymentRate))
-qqline(log(mydata$UnemploymentRate))
-
-```
-
-Now for some LDA, with an ROC curve:
+Now for some LDA, with an ROC curve?????:
 
 ```{r}
 CLASSIFICATION_THRESHOLD = 0.5
 library(MASS)
 #lda.fit = lda(defaulted~log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = train_pruned)
 lda.fit = qda(defaulted~., data = train_pruned)
-
 
 lda.fit.predict = predict(lda.fit, newdata = test_pruned, type = "response")
 #lda.pred = rep("No default",length(lda.fit.predict))
@@ -381,7 +427,6 @@ print(lda.test.conf)
 
 lda.predict.ratio = (lda.test.conf[1,1]+lda.test.conf[2,2])/(lda.test.conf[1,1]+lda.test.conf[1,2]+lda.test.conf[2,1]+lda.test.conf[2,2])
 print(lda.predict.ratio)
-
 
 lda.tpr <- lda.test.conf[2,2]/(lda.test.conf[2,2]+lda.test.conf[1,2])
 lda.fpr <- lda.test.conf[1,2]/(lda.test.conf[1,2]+lda.test.conf[1,1])
@@ -395,6 +440,3 @@ print(lda.pred.t)
 print(lda.pred.f)
 
 ```
-
-CONCLUSION:
-///
