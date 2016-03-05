@@ -364,27 +364,37 @@ optimal_cutoff <- test.pred@cutoffs[[1]][which.min(test.cost@y.values[[1]])]
 
 VaR calculations, (& bootstrap?)
 ```{r}
+library(glmnet)
 library(stats)
 
+defaultVector <- vector()
 lossVector <- vector()
+
+poolSize <- 500
 ##1000 iterations to get loss distribution
-for(i in 1:1000) {
-  random_sample <- train_indep[sample(nrow(train_indep), 500), ]
-  #Using lasso
-  #random_sample.probs <- test.phat <- predict(lasso.cv,
-                  #newx=data.matrix(random_sample),
-                  #s="lambda.1se",
-                  #type = "response")
+random_sample <- train_indep[sample(nrow(train_indep), poolSize), ]
+
+#Using lasso
+random_sample.probs <- predict(lasso.cv,
+                newx=data.matrix(random_sample),
+                s="lambda.1se",
+                type = "response")
   #Using logit
-  random_sample.probs <- predict.glm(glm.fit, newdata = random_sample, type = "response")
+  #random_sample.probs <- predict(lasso.cv,
+  #                newx=data.matrix(random_sample),
+  #                s="lambda.1se",
+  #                type = "response")
   
-  random_sample.bin <- (random_sample.probs < optimal_cutoff)
-  all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
-  sample.defaults <- random_sample[ which(random_sample.bin =='TRUE'),]
+for(i in 1:5000) {
+  random_sample.bin <- rbinom(poolSize, 1, random_sample.probs)
+  #all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
+  sample.defaults <- random_sample[ which(random_sample.bin == TRUE),]
+  defaultVector[i] <- nrow(sample.defaults)
   total.loss <- sum(sample.defaults$GrossApproval)
   lossVector[i] <- total.loss
 }
 #make histogram
+defaulthist <- hist(defaultVector)
 hist1 <- hist(lossVector)
 VaRhistorical(-lossVector)
 EShistorical(-lossVector)
