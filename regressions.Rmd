@@ -137,7 +137,7 @@ Now we divide the data into train/test sets and set up for testing different mod
 set.seed(100)
 
 mixed.set <- mydata[sample(nrow(mydata)),]
-train <- mixed.set[1:37346,]
+train <- mixed.set[1:38346,]
 test <- mixed.set[38346:53352,]
 
 #uninteresting variables not used in our model analysis
@@ -284,6 +284,8 @@ back.step.test.tpr <- performance(back.step.test.prediction, measure = "tpr")
 back.step.test.tpr@y.values
 ```
 
+
+
 Bootstrapping (not really used yet)!
 ```{r}
 
@@ -367,6 +369,38 @@ VaR calculations, (& bootstrap?)
 library(glmnet)
 library(stats)
 
+chargeoff_train <- train_pruned[train_pruned$defaulted == T,]
+chargeoff_test <- test_pruned[test_pruned$defaulted == T,]
+allDefaults <- rbind(chargeoff_train, chargeoff_test)
+
+indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
+allDefaults_indep <- allDefaults[, indepVars]
+chargeoff_train_indep <- chargeoff_train[, indepVars]
+chargeoff_test_indep <- chargeoff_test[, indepVars]
+
+lossGivenDefault <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train$GrossChargeOffAmount)
+plot(lossGivenDefault)
+
+#evaluate train error
+chargeoff_train_phat <- predict(lossGivenDefault, newx=data.matrix(chargeoff_train_indep), s="lambda.1se", type = "response")
+chargeoff_train_error <- mean((chargeoff_train_phat - chargeoff_train$GrossChargeOffAmount)^2)
+print(chargeoff_train_error)
+#evaluate test error
+chargeoff_test_phat <- predict(lossGivenDefault, newx=data.matrix(chargeoff_test_indep), s="lambda.1se")
+chargeoff_test_error <- mean((chargeoff_test_phat - chargeoff_test$GrossChargeOffAmount)^2)
+print(chargeoff_test_error)
+
+#see how the simple linear regression model works
+chargeoff_lm <- lm(GrossChargeOffAmount ~., data = chargeoff_train[,!(names(chargeoff_train) %in% c("defaulted"))])
+chargeoff_lm_predict <- predict(chargeoff_lm, newx = chargeoff_train)
+print(mean((chargeoff_lm_predict - chargeoff_train$GrossChargeOffAmount)^2))
+
+lossGivenDefault_final <- cv.glmnet(x = data.matrix(allDefaults_indep), y = allDefaults$GrossChargeOffAmount)
+chargeoff_phat <- predict(lossGivenDefault_final, newx=data.matrix(allDefaults_indep), s="lambda.1se")
+chargeoff_test_error <- mean((chargeoff_phat - allDefaults$GrossChargeOffAmount)^2)
+print(chargeoff_error)
+
+
 defaultVector <- vector()
 lossVector <- vector()
 
@@ -390,7 +424,9 @@ for(i in 1:5000) {
   #all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
   sample.defaults <- random_sample[ which(random_sample.bin == TRUE),]
   defaultVector[i] <- nrow(sample.defaults)
-  total.loss <- sum(sample.defaults$GrossApproval)
+  
+  losses <- predict(lossGivenDefault_final, newx=data.matrix(sample.defaults), s="lambda.1se")
+  total.loss <- sum(losses)
   lossVector[i] <- total.loss
 }
 #make histogram
@@ -449,4 +485,45 @@ lda.pred.f = sum(lda.fit.predict$posterior[,2] < CLASSIFICATION_THRESHOLD)
 print(lda.pred.t)
 print(lda.pred.f)
 
+```
+
+
+SVM Magic
+
+```{r}
+library(e1071)
+library(rpart)
+
+svm_indepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount", "defaulted"))
+train_svm_indep <- train_pruned[svm_indepVars]
+
+train_svm_indep <- as.matrix(train_svm_indep)
+train_svm_response <- as.factor(train_pruned$defaulted)
+
+train_svm <- data.frame(train_svm_indep, defaulted=train_svm_response)
+View(train_svm)
+
+#train_svmVars$defaulted <- as.factor(train_svmVars$defaulted)
+#train_svmVars$defaulted[train_svmVars$defaulted == 0] <- -1
+
+train.svm.fit <- svm(defaulted ~ ., data = train_svm,
+                 cost = 10,
+                 class.weights = c("TRUE" = .85, "FALSE" = .15))
+
+print(train.svm.fit)
+
+predictVars <- !(names(train_svmVars) %in% c("defaulted"))
+train.svm.pred <- predict(train.svm, train_svmVars[,predictVars])
+
+library(ROCR)
+
+svm.train.pred <- prediction(as.numeric(train.svm.pred),
+                             as.numeric(train_svmVars$defaulted))
+#plot ROC
+svm.train.roc <- performance(svm.train.pred, measure = "tpr", x.measure = "fpr")
+plot(svm.train.roc,colorize=FALSE, col="black") # plot ROC curve
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+svm.train.auc <- performance(svm.train.pred, measure = "auc")
+svm.train.auc@y.values
 ```
