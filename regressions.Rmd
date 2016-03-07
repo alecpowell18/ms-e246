@@ -79,7 +79,7 @@ names(temp_table)[names(temp_table)=="X3"] <- "HouseholdIncome"
 mydata <- merge(x=mydata, y=temp_table, by.x=c("ApprovalFiscalYear","BorrState"), by.y=c("YR","ST"))
 mydata$HouseholdIncome <- as.numeric(mydata$HouseholdIncome)
 
-#Merge data with S&P returns, VIX level, 3-month and 10-month T-bill
+#Merge data with S&P returns, VIX level, 3-month and 10-yr T-bill
 sp_data <- read.csv("SP-data.csv")
 mydata <- merge(x=mydata, y=sp_data, by.x="ApprovalFiscalYear", by.y="Year")
 
@@ -326,8 +326,8 @@ for(i in 1:1000) {
   random_sample.probs <- predict.glm(glm.fit, newdata = random_sample, type = "response")
   
   random_sample.bin <- (random_sample.probs < lambda_1se)
-  all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
-  sample.defaults <- mydata[ which(random_sample.bin =='TRUE'),]
+  all_loss_amounts <- glm_train_indep[,"GrossChargeOffAmount"]
+  sample.defaults <- glm_train_indep[ which(random_sample.bin =='TRUE'),]
   total.loss <- sum(sample.defaults$GrossApproval)
   lossVector[i] <- total.loss
 }
