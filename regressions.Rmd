@@ -1,701 +1,3 @@
-<<<<<<< HEAD
----
-title: "MS&E246Project"
-author: "Frank Fan, Matthew Kim, Cam Najmabadi, Alec Powell"
-date: "March 12, 2016"
-output: pdf_document
----
-
-Introduction
-
-For this project, the objective was to compile data and form a predictive model for default and VaR of a set of Small Business Administration (SBA) loans from 1991-2014. In addition to the given data we have compiled various sets of data...
-
-Make/merge datasets
-```{r}
-mydata <- read.csv("SBA_Loan_data.csv")
-# Making new column for default status
-mydata$defaulted <- mydata$GrossChargeOffAmount > 0
-#take out status=EXEMPT and status=CANCLD
-mydata <- subset(mydata, LoanStatus!="EXEMPT"&LoanStatus!="CANCLD"&!is.na(BusinessType))
-#find loans where term is (not) yearly
-mydata$TermYearly <- mydata$TermInMonths%%12 == 0
-
-#find duplicate borrowers
-n_occur <- data.frame(table(mydata$BorrName))
-n_occur <- n_occur[n_occur$Freq > 1,]
-mydata$IsDuplicateBorrower <- mydata$BorrName %in% n_occur[,1]
-
-#Merge with Housing Price Index data from FHFA (works!)
-hpi_data <- read.table("HPI_PO_state.txt", header=TRUE, sep="\t")
-names(hpi_data)[names(hpi_data)=="index_sa"] <- "HousingPriceIndex"
-hpi.badcols <- c("Warning","index_nsa", "qtr")
-hpi_data <- subset(hpi_data, qtr==4)
-hpi_data <- hpi_data[,-which(names(hpi_data) %in% hpi.badcols)]
-mydata <- merge(x=mydata, y=hpi_data, by.x=c("BorrState","ApprovalFiscalYear"), by.y=c("state","yr"))
-
-#Merge with State Unemployment Rate data from BLS
-unemp_data <- read.table("State_level_unemployment_rate_Monthly.txt", header=TRUE, sep="\t")
-unemp_data_subset <- unemp_data[grep("-12-01", unemp_data$DATE), ]
-unemp_data_subset$DATE <- gsub("-12-01", "", unemp_data_subset$DATE)
-names(unemp_data_subset) <- gsub("UR","",names(unemp_data_subset))
-
-#splice unemployment rate data into mydata table (works)
-unemp_data_subset <- unemp_data_subset[,!(names(unemp_data_subset) %in% c("DATE"))]
-temp_table <- data.frame(matrix(NA, nrow = 2000, ncol = 3))
-i = 1
-for(yr in 1:nrow(unemp_data_subset)) {
-  for(st in names(unemp_data_subset)) {
-    temp_table[i, ] = c(yr+1975,st,unemp_data_subset[yr,st])
-    i=i+1
-  }
-}
-names(temp_table)[names(temp_table)=="X1"] <- "YR"
-names(temp_table)[names(temp_table)=="X2"] <- "ST"
-names(temp_table)[names(temp_table)=="X3"] <- "UnemploymentRate"
-mydata <- merge(x=mydata, y=temp_table, by.x=c("ApprovalFiscalYear","BorrState"), by.y=c("YR","ST"))
-mydata$UnemploymentRate <- as.numeric(mydata$UnemploymentRate)
-
-#Merge with Federal Funds Rate data from St. Louis Fed (works!)
-fedfunds_data <- read.csv("fredgraph.csv")
-fedfunds_data_subset <- fedfunds_data[grep("-12-01", fedfunds_data$observation_date),]
-fedfunds_data_subset$observation_date <- gsub("-12-01", "", fedfunds_data_subset$observation_date)
-mydata <- merge(x=mydata, y=fedfunds_data_subset, by.x="ApprovalFiscalYear", by.y="observation_date")
-
-#Merge with Median Household Income data from US Census Bureau (works!)
-household_income_data <- read.csv("medianhhincome.csv", header=TRUE)
-names(household_income_data) <- gsub("X","",names(household_income_data))
-household_mat <- as.matrix(household_income_data)
-
-temp_table <- data.frame(matrix(NA, nrow = 1250, ncol = 3))
-i = 1
-for(yr in 2:ncol(household_mat)) {
-  for(st in 1:nrow(household_mat)-1) {
-    temp_table[i, ] = c(2016-yr,household_mat[st,1],as.integer(gsub(",","",household_mat[st,yr])))
-    i=i+1
-  }
-}
-names(temp_table)[names(temp_table)=="X1"] <- "YR"
-names(temp_table)[names(temp_table)=="X2"] <- "ST"
-names(temp_table)[names(temp_table)=="X3"] <- "HouseholdIncome"
-mydata <- merge(x=mydata, y=temp_table, by.x=c("ApprovalFiscalYear","BorrState"), by.y=c("YR","ST"))
-mydata$HouseholdIncome <- as.numeric(mydata$HouseholdIncome)
-
-#Merge data with S&P returns, VIX level, 3-month and 10-month T-bill
-sp_data <- read.csv("SP-data.csv")
-mydata <- merge(x=mydata, y=sp_data, by.x="ApprovalFiscalYear", by.y="Year")
-
-#Merge data with additional data from Cameron's research:
-addl_data <- read.csv("Addl_Data_Selected.csv")
-
-addl_data$Euro.USD <- NULL
-addl_data$X10.yrSwap <- NULL
-addl_data$Case.Shiller <- NULL
-
-##CREATE DUMMY VARIABLES TO INDICATE MISSING DATA. OR ELSE
-addl_data$StockMktTurnover_China <- NULL
-addl_data$BAML_HY_Adj_Sprd <- NULL
-addl_data$DisposableIncome <- NULL
-
-
-mydata <- merge(x=mydata, y=addl_data, by.x="ApprovalFiscalYear", by.y="Year")
-
-#Calculating overall percentage of loans defaulted
-#sum(!mydata$defaulted)/nrow(mydata)
-
-## which states have the most defaults?
-#Calcluate percentage of loans defaulted by state
-#state_v_default <- xtabs(~ BorrState + defaulted, data = mydata)
-#state_v_default <- as.data.frame.matrix(state_v_default)
-#state_v_default[-1,]
-#state_v_default$percentage <- state_v_default[,2]/(state_v_default[,1]+state_v_default[,2]) 
-#only_defaults <- mydata[which(mydata$GrossChargeOffAmount > 0),]
-```
-Now, onto years. Which years were the most defaults observed?
-
-```{r}
-
-#year_v_default <- xtabs(~ ApprovalFiscalYear + defaulted, data = mydata)
-#year_v_default <- as.data.frame.matrix(year_v_default)
-#year_v_default$percentage <- year_v_default[,2]/(year_v_default[,1]+year_v_default[,2]) 
-
-#classifying/indicator based on business type
-#b_type_table <- xtabs(~ BusinessType + defaulted, data = mydata)
-#b_type_table <- as.data.frame.matrix(b_type_table)
-#b_type_table$percentage <- b_type_table[,2]/(b_type_table[,1]+b_type_table[,2]) 
-
-#Make indicator variables for top 10 default years, top 10 default states
-#top_10_default_states <- row.names(state_v_default[order(state_v_default$percentage,decreasing=T)[1:10],])
-#top_10_default_years <- row.names(year_v_default[order(year_v_default$percentage,decreasing = T)[1:10],])
-#mydata$badState <- mydata$BorrState %in% top_10_default_states
-#mydata$badYear <- mydata$ApprovalFiscalYear %in% top_10_default_years
-
-```
-
-Now we divide the data into train/test sets and set up for testing different models.
-
-```{r}
-#testing for linear and logistic?
-set.seed(100)
-
-mixed.set <- mydata[sample(nrow(mydata)),]
-train <- mixed.set[1:38346,]
-test <- mixed.set[38346:53352,]
-
-#uninteresting variables not used in our model analysis
-drops <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","ApprovalDate","ChargeOffDate","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
-
-train_pruned <- train[,!(names(train) %in% drops)]
-test_pruned <- test[,!(names(test) %in% drops)]
-
-# Multiple Linear Regression, first attempt
-myvars <- names(test_pruned) %in% c("defaulted")
-lm.fit <- lm(GrossChargeOffAmount~., data = test_pruned[!myvars])
-summary(lm.fit) # show results
-
-#pairs(test_pruned)
-
-myvars_new <- names(train_pruned) %in% c("defaulted","DeliveryMethod","BusinessType")
-train_pruned_subset <- subset(train_pruned, select = !myvars_new)
-test_pruned_subset <- subset(test_pruned, select = !myvars_new)
-
-# Logistic Regression 3/2 works well
-glm.fit <- glm(defaulted~.-GrossChargeOffAmount, data = train_pruned, family = "binomial")
-glm.probs <- predict.glm(glm.fit, newdata = test_pruned, type = "response")
-summary(glm.fit)
-
-#confusion matrix
-CLASSIFICATION_THRESHOLD = 0.1
-glm.pred = rep("No default",length(glm.probs))
-glm.pred [glm.probs > CLASSIFICATION_THRESHOLD] = "Yes-Default"
-glm.test.conf <- table(glm.pred, test_pruned$defaulted)
-
-glm.predict.ratio <- (glm.test.conf[1,1]+glm.test.conf[2,2])/(glm.test.conf[1,1]+glm.test.conf[1,2]+glm.test.conf[2,1]+glm.test.conf[2,2])
-
-#True postive and false positive rates (for ROC curve)
-glm.tpr <- glm.test.conf[2,2]/(glm.test.conf[2,2]+glm.test.conf[1,2])
-glm.fpr <- glm.test.conf[1,2]/(glm.test.conf[1,2]+glm.test.conf[1,1])
-
-plot(glm.fpr,glm.tpr)
-
-```
-
-AUC Code from Frank
-
-```{r}
-
-library(glmnet)
-library(ROCR)
-grid=10^seq(2,-2,length=100)
-
-#set up logistic regression
-glmIndepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount"))
-glm_train_indep <- train_pruned[,glmIndepVars]
-glm_test_indep <- test_pruned[,glmIndepVars]
-
-#make indicator variables for delivery method, business type
-#using glm_train_indep
-glm_train_indep$is504 <- glm_train_indep$DeliveryMethod == "504"
-glm_train_indep$isPCLP <- glm_train_indep$DeliveryMethod == "PCLP"
-glm_train_indep$isALP <- glm_train_indep$DeliveryMethod == "ALP"
-glm_train_indep$isRefi <- glm_train_indep$DeliveryMethod == "504REFI"
-n_occur_temp <- data.frame(table(glm_train_indep$DeliveryMethod))
-glm_train_indep$isIndiv <- glm_train_indep$BusinessType == "INDIVIDUAL"
-glm_train_indep$isPartnership <- glm_train_indep$BusinessType == "PARTNERSHIP"
-glm_train_indep$isCorp <- glm_train_indep$BusinessType == "CORPORATION"
-
-glm_test_indep$is504 <- glm_test_indep$DeliveryMethod == "504"
-glm_test_indep$isPCLP <- glm_test_indep$DeliveryMethod == "PCLP"
-glm_test_indep$isALP <- glm_test_indep$DeliveryMethod == "ALP"
-glm_test_indep$isRefi <- glm_test_indep$DeliveryMethod == "504REFI"
-glm_test_indep$isIndiv <- glm_test_indep$BusinessType == "INDIVIDUAL"
-glm_test_indep$isPartnership <- glm_test_indep$BusinessType == "PARTNERSHIP"
-glm_test_indep$isCorp <- glm_test_indep$BusinessType == "CORPORATION"
-#take out non-numeric columns
-boot_drops <- c("DeliveryMethod","BusinessType")
-glm_train_indep <- glm_train_indep[,!(names(glm_train_indep) %in% boot_drops)]
-glm_test_indep <- glm_test_indep[,!(names(glm_test_indep) %in% boot_drops)]
-
-glm.fit <- glm(defaulted~., data = glm_train_indep, family = binomial)
-glm.probs <- predict.glm(glm.fit, newdata = glm_train_indep, type = "response")
-glm.train.pred <- prediction(glm.probs, train_pruned$defaulted)
-
-# get statistics on the model
-
-#roc
-glm.train.perf <- performance(glm.train.pred, measure = "tpr", x.measure = "fpr")
-plot(glm.train.perf,colorize=FALSE, col="black") # plot ROC curve
-lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-
-#accuracy
-glm.train.err <- performance(glm.train.pred, measure = "err")
-plot(glm.train.err, col = "red")
-glm.train.fpr <- performance(glm.train.pred, measure = "fpr")
-plot(glm.train.fpr, add=TRUE, col = "green")
-glm.train.fnr <- performance(glm.train.pred, measure = "fnr")
-plot(glm.train.fnr, add=TRUE, col = "blue")
-
-
-glm.test.probs <- predict.glm(glm.fit, newdata = glm_test_indep, type = "response")
-glm.test.pred <- prediction(glm.test.probs, test_pruned$defaulted)
-
-glm.test.err <- performance(glm.test.pred, measure = "err")
-plot(glm.test.err, col = "black", xlim=c(0,.5), xlab = "Threshold")
-glm.test.fpr <- performance(glm.test.pred, measure = "fpr")
-plot(glm.test.fpr, add=TRUE, col = "red", lty = 3)
-glm.test.fnr <- performance(glm.test.pred, measure = "fnr")
-plot(glm.test.fnr, add=TRUE, col = "blue", lty=2)
-
-legend("top", cex = .5,
-       c("Total Error Rate","False Positive Rate","False Negative Rate"),
-       lty=c(1,1,1), # gives the legend appropriate symbols (lines)
-       lwd=c(2.5,2.5,2.5),col=c("black","red","blue"))
-
-```
-
-stepwise model selection with logistic regression
-```{r}
-defaults.forward.stepwise <- step(glm(defaulted ~ 1, glm_train_indep, family = "binomial"),
-                                  list(upper = ~. + InterbankLoans:ConsumerLoans),
-                                  direction = "forward")
-
-defaults.glm <- glm(defaulted ~ ., glm_train_indep, family="binomial")
-
-defaults.backward.stepwise <- step(defaults.glm, direction = "backward")
-
-#This is the best subset:
-#ApprovalFiscalYear + GrossApproval + TermInMonths + HousingPriceIndex + HouseholdIncome + S.P500 + X3month + X10year + VIX + PublicDebt.GDP + X4_wkMAjobless_claims + RealGDPGrowth + TedRate + Velocity_M2_MS + ConsumerLoans + InterbankLoans + CPI_Index + InflationExpectation + isPCLP + isALP + isPartnership + isCorp + ConsumerLoans:InterbankLoans + InterbankLoans:ConsumerLoans
-
-summary(defaults.backward.stepwise)
-
-back.step.preds <- predict(defaults.backward.stepwise, glm_train_indep, type="response")
-back.step.prediction <- prediction(back.step.preds, glm_train_indep$defaulted)
-back.step.roc <- performance(back.step.prediction, measure = "tpr", x.measure = "fpr")
-plot(back.step.roc)
-back.step.auc <- performance(back.step.prediction, measure = "auc")
-back.step.auc@y.values
-
-back.step.test.preds <- predict(defaults.backward.stepwise, glm_test_indep, type="response")
-back.step.test.prediction <- prediction(back.step.test.preds, glm_test_indep$defaulted)
-back.step.test.roc <- performance(back.step.test.prediction, measure = "tpr", x.measure = "fpr")
-plot(back.step.test.roc)
-back.step.test.auc <- performance(back.step.test.prediction, measure = "auc")
-back.step.test.auc@y.values
-
-back.step.test.tpr <- performance(back.step.test.prediction, measure = "tpr")
-back.step.test.tpr@y.values
-```
-
-
-
-Bootstrapping (not really used yet)!
-```{r}
-
-# Bootstrap 95% CI for regression coefficients (not needed?)
-library(boot)
-# function to obtain regression weights 
-bs <- function(formula, data, indices) {
-  d <- data[indices,] # allows boot to select sample
-  fit <- lm(formula, data=d)
-  return(coef(fit))
-} 
-# bootstrapping with 1000 replications 
-#results <- boot(data=glm_train_indep, statistic=bs, 
-#    R=1000, formula=defaulted~HousingPriceIndex+FEDFUNDS+UnemploymentRa#te)
-results <- boot(data=glm_train_indep, statistic=bs, 
-  	R=1000, formula=defaulted~.)
-
-# view results
-results
-plot(results, index=1) # intercept
-plot(results, index=2) # HPI
-plot(results, index=3) # FEDFUNDS
-plot(results, index=4) # UnemploymentRate
-
-# get 95% confidence intervals 
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=1) # intercept
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=2) # HPI
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=3) # FEDFUNDS
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=4) # Unemployment
-
-```
-
-3/2 from Frank
-```{r}
-library(glmnet)
-indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
-train_indep <- train_pruned[, indepVars]
-test_indep <- test_pruned[, indepVars]
-# Control randomness in Lasso CV fit
-set.seed(2123)
-# Produce a Lasso CV fit
-lasso.cv <- cv.glmnet(x=data.matrix(train_indep), y=train_pruned$defaulted, family = "binomial")
-plot(lasso.cv)
-# Use the 1 standard-error rule to pick lambda
-lambda_1se <- lasso.cv$lambda.1se
-#Print min lambda
-lambda_min <- lasso.cv$lambda.min
-```
-
-2) Next, we fit the Lasso to our full training set using this tuning parameter.
-```{r,eval=TRUE}
-# Extract the Lasso models fit to the full training set
-lasso.models <- lasso.cv$glmnet.fit 
-# Identify which model is associated with the selected tuning parameter
-selected.index <- which(lasso.models$lambda == lasso.cv$lambda.1se)
-# Display the predictors with non-zero coefficients in the selected model
-colnames(train_indep)[lasso.models$beta[,selected.index] != 0]
-```
-Happily, only a small number of coefficients are used by the model; this makes the result especially interpretable.
-
-3) Let's get the ROC curve for this model on the lambda we picked earlier!
-```{r}
-test.phat <- predict(lasso.cv,
-                  newx=data.matrix(test_indep),
-                  s="lambda.1se",
-                  type = "response")
-test.pred <- prediction(test.phat, test_pruned$defaulted)
-  # Obtain performance statistics
-  # Plot ROC
-  test.roc <- performance(test.pred, measure = "tpr", x.measure = "fpr")
-  plot(test.roc,colorize=FALSE, col="black")
-  lines(c(0,1),c(0,1),col = "gray", lty = 4 )  
-
-test.cost<- performance(test.pred, "cost")
-optimal_cutoff <- test.pred@cutoffs[[1]][which.min(test.cost@y.values[[1]])]
-```
-
-
-VaR calculations, (& bootstrap?)
-```{r}
-library(glmnet)
-library(stats)
-
-chargeoff_train <- train_pruned[train_pruned$defaulted == T,]
-chargeoff_test <- test_pruned[test_pruned$defaulted == T,]
-allDefaults <- rbind(chargeoff_train, chargeoff_test)
-
-indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
-allDefaults_indep <- allDefaults[, indepVars]
-chargeoff_train_indep <- chargeoff_train[, indepVars]
-chargeoff_test_indep <- chargeoff_test[, indepVars]
-
-lossGivenDefault <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train$GrossChargeOffAmount)
-plot(lossGivenDefault)
-
-#evaluate train error
-chargeoff_train_phat <- predict(lossGivenDefault, newx=data.matrix(chargeoff_train_indep), s="lambda.1se", type = "response")
-chargeoff_train_error <- mean((chargeoff_train_phat - chargeoff_train$GrossChargeOffAmount)^2)
-print(chargeoff_train_error)
-#evaluate test error
-chargeoff_test_phat <- predict(lossGivenDefault, newx=data.matrix(chargeoff_test_indep), s="lambda.1se")
-chargeoff_test_error <- mean((chargeoff_test_phat - chargeoff_test$GrossChargeOffAmount)^2)
-print(chargeoff_test_error)
-
-#see how the simple linear regression model works
-chargeoff_lm <- lm(GrossChargeOffAmount ~., data = chargeoff_train[,!(names(chargeoff_train) %in% c("defaulted"))])
-chargeoff_lm_predict <- predict(chargeoff_lm, newx = chargeoff_train)
-print(mean((chargeoff_lm_predict - chargeoff_train$GrossChargeOffAmount)^2))
-
-lossGivenDefault_final <- cv.glmnet(x = data.matrix(allDefaults_indep), y = allDefaults$GrossChargeOffAmount)
-chargeoff_phat <- predict(lossGivenDefault_final, newx=data.matrix(allDefaults_indep), s="lambda.1se")
-chargeoff_test_error <- mean((chargeoff_phat - allDefaults$GrossChargeOffAmount)^2)
-print(chargeoff_error)
-
-
-defaultVector <- vector()
-lossVector <- vector()
-
-poolSize <- 500
-##1000 iterations to get loss distribution
-random_sample <- train_indep[sample(nrow(train_indep), poolSize), ]
-
-#Using lasso
-random_sample.probs <- predict(lasso.cv,
-                newx=data.matrix(random_sample),
-                s="lambda.1se",
-                type = "response")
-  #Using logit
-  #random_sample.probs <- predict(lasso.cv,
-  #                newx=data.matrix(random_sample),
-  #                s="lambda.1se",
-  #                type = "response")
-
-for(i in 1:20000) {
-  random_sample.bin <- rbinom(poolSize, 1, random_sample.probs)
-  #all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
-  sample.defaults <- random_sample[ which(random_sample.bin == TRUE),]
-  defaultVector[i] <- nrow(sample.defaults)
-
-  losses <- predict(lossGivenDefault_final, newx=data.matrix(sample.defaults), s="lambda.1se")
-  total.loss <- sum(losses)
-  lossVector[i] <- total.loss
-}
-#make histogram
-sample_sd <- sd(-lossVector)
-sample_mean <- mean(-lossVector)
-sample_size <- length(lossVector)
-
-#use Diaconis-Freedman formula to calculate optimal number of bins for histogram
-default.bins <- ceiling((max(defaultVector)-min(defaultVector))/((2*IQR(defaultVector))/((sample_size)^(1/3))))
-defaulthist <- hist(defaultVector, breaks=default.bins, main="Defaults Distribution")
-
-loss.bins <- ceiling((max(lossVector)-min(lossVector))/((2*IQR(lossVector))/((sample_size)^(1/3))))
-hist1 <- hist(lossVector, breaks=loss.bins, main="Total Loss Distribution")
-lines(density(lossVector, adjust=2), col = "darkblue", lwd=2)
-#plot(dnorm(x, mean(lossVector), sd(lossVector)), add=TRUE, col="darkblue", lwd=2)
-
-numIterations <- 20000
-varLevel <- 0.99
-lossVector <- sort(lossVector)
-##MAKE SURE TO SORT THE LOSS VECTOR FIRST (ASCENDING)
-#for 95% CI
-confIntBounds <- qbinom(c(.025,.975), numIterations, 0.95)
-a <- lossVector[confIntBounds[1]]
-b <- lossVector[confIntBounds[2]]
-#for 99% CI
-confIntBounds_1 <- qbinom(c(.005,.995), numIterations, 0.99)
-a1 <- lossVector[confIntBounds_1[1]]
-b1 <- lossVector[confIntBounds_1[2]]
-
-var.calc <- VaRhistorical(-lossVector)
-es.calc <- EShistorical(-lossVector)
-
-#set prob=.01 for 99% confidence intervals
-VaRhistorical <- function(returnVector, prob=.05, 
-    notional=1, digits=4) 
-{
-  if(prob > .5) prob <- 1 - prob
-  ans <- -quantile(returnVector, prob) * notional
-  signif(ans, digits=digits)
-}
-
-#set prob=.01 for 99% confidence intervals
-EShistorical <- function(returnVector, indices, prob=.05, 
-    notional=1, digits=4)
-{
-  if(prob > .5) prob <- 1 - prob
-  d <- returnVector[indices]
-  v <- quantile(d, prob)
-  ans <- -mean(d[d <= v]) * notional
-  return(signif(ans, digits=digits))
-}
-
-# Bootstrap 95% CI for regression coefficients - for average VaR
-library(boot)
-# bootstrapping with 1000 replications 
-results <- boot(data=-lossVector, statistic=EShistorical, 
-    R=1000)
-# view results
-results
-plot(results, index=1) # intercept
-
-# get 95%/99% confidence intervals
-boot.ci(results, conf = 0.99, type=c("norm"), index=1) # intercept
-
-```
-
-Now for some LDA, with an ROC curve?????:
-
-```{r}
-CLASSIFICATION_THRESHOLD = 0.5
-library(MASS)
-#lda.fit = lda(defaulted~log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = train_pruned)
-lda.fit = qda(defaulted~., data = train_pruned)
-
-lda.fit.predict = predict(lda.fit, newdata = test_pruned, type = "response")
-#lda.pred = rep("No default",length(lda.fit.predict))
-#lda.pred [lda.fit.predict > CLASSIFICATION_THRESHOLD] = "Yes-Default"
-#lda.test.conf <- table(lda.pred, test_pruned$defaulted)
-
-lda.test.conf = table(lda.fit.predict$class, test_pruned$defaulted)
-print(lda.test.conf)
-
-lda.predict.ratio = (lda.test.conf[1,1]+lda.test.conf[2,2])/(lda.test.conf[1,1]+lda.test.conf[1,2]+lda.test.conf[2,1]+lda.test.conf[2,2])
-print(lda.predict.ratio)
-
-lda.tpr <- lda.test.conf[2,2]/(lda.test.conf[2,2]+lda.test.conf[1,2])
-lda.fpr <- lda.test.conf[1,2]/(lda.test.conf[1,2]+lda.test.conf[1,1])
-plot(lda.fpr,lda.tpr)
-
-# number of predicted defaults:
-lda.pred.t = sum(lda.fit.predict$posterior[,2] >= CLASSIFICATION_THRESHOLD)
-# number of predicted non-defaults:
-lda.pred.f = sum(lda.fit.predict$posterior[,2] < CLASSIFICATION_THRESHOLD)
-print(lda.pred.t)
-print(lda.pred.f)
-
-```
-
-
-SVM Magic
-
-```{r}
-library(e1071)
-library(rpart)
-
-svm_indepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount", "defaulted"))
-train_svm_indep <- train_pruned[svm_indepVars]
-train_svm_indep <- as.matrix(train_svm_indep)
-train_svm_response <- as.factor(train_pruned$defaulted)
-train_svm <- data.frame(train_svm_indep, defaulted=train_svm_response)
-View(train_svm)
-
-test_svm_indep <- test_pruned[svm_indepVars]
-test_svm_indep <- as.matrix(test_svm_indep)
-test_svm_response <- as.factor(test_pruned$defaulted)
-test_svm <- data.frame(test_svm_indep, defaulted=test_svm_response)
-
-train_svm_radial_predictions <- vector()
-test_svm_radial_predictions <- vector()
-train.svm.models <- vector()
-for (i in 1:3){
-  train.svm.fit <- svm(defaulted ~ ., data = train_svm,
-                 cost = 10 * (10^i),
-                 class.weights = c("TRUE" = .85, "FALSE" = .15),
-                 kernel = "radial",
-                 probability = TRUE)
-  train.svm.models[i] <- train.svm.fit
-  
-  #predictVars <- !(names(train_svm_indep %in% c("defaulted"))
-  train.svm.pred <- predict(train.svm.fit, train_svm_indep, probability = TRUE)
-  svm.train.pred <- prediction(as.numeric(train.svm.pred),
-                               as.numeric(train_svm_response))
-  
-  train_svm_radial_predictions[i] <- svm.train.pred
-  
-  
-  test.svm.pred <- predict(train.svm.fit, test_svm_indep, probability = TRUE)
-  test.svm.pred <- prediction(as.numeric(test.svm.pred),
-                               as.numeric(test_svm_response))
-  
-  test_svm_radial_predictions[i] <- test.svm.pred
-}
-
-
-poly.svm.train.grid <- matrix(nrow=3, ncol=3)
-poly.svm.test.grid <- matrix(nrow=3, ncol=3)
-#cost
-for (i in 1:3){
-  #coef0
-  for(j in 1:3){
-    train.svm.fit <- svm(defaulted ~ ., data = train_svm,
-                 cost = .01 * (10 ^ i),
-                 coef0 = .01 * (10 ^ j),
-                 class.weights = c("TRUE" = .85, "FALSE" = .15),
-                 kernel = "polynomial",
-                 probability = TRUE)
-
-  #predictVars <- !(names(train_svm_indep %in% c("defaulted"))
-  train.svm.pred <- predict(train.svm.fit, train_svm_indep, probability = TRUE)
-  svm.train.pred <- prediction(as.numeric(train.svm.pred),
-                               as.numeric(train_svm_response))
-  poly.svm.train.grid[i][j] <- svm.train.pred
-  
-  test.svm.pred <- predict(train.svm.fit, test_svm_indep, probability = TRUE)
-  test.svm.pred <- prediction(as.numeric(test.svm.pred),
-                               as.numeric(test_svm_response))
-  poly.svm.test.grid[i][j] <- test.svm.pred
-  }
-}
-
-radial001 <- train.svm.pred
-radial0001 <- train.svm.pred
-radial01 <- train.svm.pred
-
-rradial01 <- prediction(as.numeric(radial01),
-                             as.numeric(train_svm_response[1:9337]))
-rradial001 <- prediction(as.numeric(radial001),
-                             as.numeric(train_svm_response[1:9337]))
-rradial0001 <- prediction(as.numeric(radial0001),
-                             as.numeric(train_svm_response[1:9337]))
-
-sv.r.01 <- performance(rradial01, measure = "tpr", x.measure = "fpr")
-sv.r.001 <- performance(rradial001, measure = "tpr", x.measure = "fpr")
-sv.r.0001 <- performance(rradial0001, measure = "tpr", x.measure = "fpr")
-
-plot(sv.r.01, col="black", main = "SVM Model w/ Varying Cost") # plot ROC curve
-plot(sv.r.001, col="blue", add=T) # plot ROC curve
-plot(sv.r.0001, col="red", add=T) # plot ROC curve
-legend("top", cex = .5,
-       c("radial kernel, C = .01","radial kernel, C = .001","radial kernel, C = .0001"),
-       lty=c(1,1,1), # gives the legend appropriate symbols (lines)
-       lwd=c(2.5,2.5,2.5),col=c("black","blue","red"))
-lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-
-train.svm.fit <- svm(defaulted ~ ., data = train_svm[1:9337,],
-                 cost = .01,
-                 class.weights = c("TRUE" = .85, "FALSE" = .15),
-                 kernel = "radial",
-                 probability = TRUE)
-
-print(train.svm.fit)
-
-#predictVars <- !(names(train_svm_indep %in% c("defaulted"))
-train.svm.pred <- predict(train.svm.fit, train_svm[1:9337,], probability = TRUE)
-svm.train.pred <- prediction(as.numeric(train.svm.pred),
-                             as.numeric(train_svm_response[1:9337]))
-#plot ROC
-svm.train.roc <- performance(svm.train.pred, measure = "tpr", x.measure = "fpr")
-plot(svm.train.roc,colorize=FALSE, col="black") # plot ROC curve
-lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-svm.train.auc <- performance(svm.train.pred, measure = "auc")
-svm.train.auc@y.values
-
-test.svm.pred <- predict(train.svm.fit, test_svm_indep)
-test.svm.pred <- prediction(as.numeric(test.svm.pred),
-                             as.numeric(test_svm_response))
-#plot ROC
-svm.test.roc <- performance(svm.test.pred, measure = "tpr", x.measure = "fpr")
-plot(svm.test.roc,colorize=FALSE, col="black") # plot ROC curve
-lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-svm.test.auc <- performance(svm.test.pred, measure = "auc")
-svm.test.auc@y.values
-
-
-##LOL
-
-test.svm.pred <- predict(train.svm.fit, train_svm[10000:12500,])
-test.svm.pred <- prediction(as.numeric(test.svm.pred),
-                             as.numeric(train_svm_response[10000:12500]))
-#plot ROC
-svm.test.roc <- performance(test.svm.pred, measure = "tpr", x.measure = "fpr")
-plot(svm.test.roc,colorize=FALSE, col="black") # plot ROC curve
-lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-svm.test.auc <- performance(test.svm.pred, measure = "auc")
-svm.test.auc@y.values
-```
-
-```{r}
-
-#everything in the myData (using test_pruned to quantify/evalute errors in the model that trained_pruned)
-#one run through (complex) using coxph
-#format data in the proper way in order to fit it into the coxph package -> hazard model
-#variables: train_pruned, test_pruned
-#
-#we're feeding train_pruned into some function to produce a model (this will coxph). We feed test_pruned into the model to produce metrics
-#model of time to default. Try using all the variables
-#merge extra data if time available
-
-
-library(survival)
-drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
-
-train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
-
-train_pruned_surv$status <- train_pruned_surv$GrossChargeOffAmount == 0
-train_pruned_surv$EndDate <- train_pruned_surv$ChargeOffDate
-train_pruned_surv$EndDate[train_pruned_surv$status == TRUE] <- as.Date('1/1/2016', format="%m/%d/%y")
-train_pruned_surv$years <- (as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate))) / 365
-
-#Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
-#coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~x, data=train_pruned_surv)
-summary(coxfit1)
-survfit(coxfit1, 
-
-
-
-```
-=======
 ---
 title: "MS&E246Project"
 author: "Frank Fan, Matthew Kim, Cam Najmabadi, Alec Powell"
@@ -1277,41 +579,141 @@ library(rpart)
 
 svm_indepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount", "defaulted"))
 train_svm_indep <- train_pruned[svm_indepVars]
-
 train_svm_indep <- as.matrix(train_svm_indep)
 train_svm_response <- as.factor(train_pruned$defaulted)
-
 train_svm <- data.frame(train_svm_indep, defaulted=train_svm_response)
 View(train_svm)
 
-#train_svmVars$defaulted <- as.factor(train_svmVars$defaulted)
-#train_svmVars$defaulted[train_svmVars$defaulted == 0] <- -1
+test_svm_indep <- test_pruned[svm_indepVars]
+test_svm_indep <- as.matrix(test_svm_indep)
+test_svm_response <- as.factor(test_pruned$defaulted)
+test_svm <- data.frame(test_svm_indep, defaulted=test_svm_response)
 
-train.svm.fit <- svm(defaulted ~ ., data = train_svm,
-                 cost = 10,
-                 class.weights = c("TRUE" = .85, "FALSE" = .15))
+train_svm_radial_predictions <- vector()
+test_svm_radial_predictions <- vector()
+train.svm.models <- vector()
+for (i in 1:3){
+  train.svm.fit <- svm(defaulted ~ ., data = train_svm,
+                 cost = 10 * (10^i),
+                 class.weights = c("TRUE" = .85, "FALSE" = .15),
+                 kernel = "radial",
+                 probability = TRUE)
+  train.svm.models[i] <- train.svm.fit
+  
+  #predictVars <- !(names(train_svm_indep %in% c("defaulted"))
+  train.svm.pred <- predict(train.svm.fit, train_svm_indep, probability = TRUE)
+  svm.train.pred <- prediction(as.numeric(train.svm.pred),
+                               as.numeric(train_svm_response))
+  
+  train_svm_radial_predictions[i] <- svm.train.pred
+  
+  
+  test.svm.pred <- predict(train.svm.fit, test_svm_indep, probability = TRUE)
+  test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                               as.numeric(test_svm_response))
+  
+  test_svm_radial_predictions[i] <- test.svm.pred
+}
+
+
+poly.svm.train.grid <- matrix(nrow=3, ncol=3)
+poly.svm.test.grid <- matrix(nrow=3, ncol=3)
+#cost
+for (i in 1:3){
+  #coef0
+  for(j in 1:3){
+    train.svm.fit <- svm(defaulted ~ ., data = train_svm,
+                 cost = .01 * (10 ^ i),
+                 coef0 = .01 * (10 ^ j),
+                 class.weights = c("TRUE" = .85, "FALSE" = .15),
+                 kernel = "polynomial",
+                 probability = TRUE)
+
+  #predictVars <- !(names(train_svm_indep %in% c("defaulted"))
+  train.svm.pred <- predict(train.svm.fit, train_svm_indep, probability = TRUE)
+  svm.train.pred <- prediction(as.numeric(train.svm.pred),
+                               as.numeric(train_svm_response))
+  poly.svm.train.grid[i][j] <- svm.train.pred
+  
+  test.svm.pred <- predict(train.svm.fit, test_svm_indep, probability = TRUE)
+  test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                               as.numeric(test_svm_response))
+  poly.svm.test.grid[i][j] <- test.svm.pred
+  }
+}
+
+radial001 <- train.svm.pred
+radial0001 <- train.svm.pred
+radial01 <- train.svm.pred
+
+rradial01 <- prediction(as.numeric(radial01),
+                             as.numeric(train_svm_response[1:9337]))
+rradial001 <- prediction(as.numeric(radial001),
+                             as.numeric(train_svm_response[1:9337]))
+rradial0001 <- prediction(as.numeric(radial0001),
+                             as.numeric(train_svm_response[1:9337]))
+
+sv.r.01 <- performance(rradial01, measure = "tpr", x.measure = "fpr")
+sv.r.001 <- performance(rradial001, measure = "tpr", x.measure = "fpr")
+sv.r.0001 <- performance(rradial0001, measure = "tpr", x.measure = "fpr")
+
+plot(sv.r.01, col="black", main = "SVM Model w/ Varying Cost") # plot ROC curve
+plot(sv.r.001, col="blue", add=T) # plot ROC curve
+plot(sv.r.0001, col="red", add=T) # plot ROC curve
+legend("top", cex = .5,
+       c("radial kernel, C = .01","radial kernel, C = .001","radial kernel, C = .0001"),
+       lty=c(1,1,1), # gives the legend appropriate symbols (lines)
+       lwd=c(2.5,2.5,2.5),col=c("black","blue","red"))
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+train.svm.fit <- svm(defaulted ~ ., data = train_svm[1:9337,],
+                 cost = .01,
+                 class.weights = c("TRUE" = .85, "FALSE" = .15),
+                 kernel = "radial",
+                 probability = TRUE)
 
 print(train.svm.fit)
 
-predictVars <- !(names(train_svmVars) %in% c("defaulted"))
-train.svm.pred <- predict(train.svm, train_svmVars[,predictVars])
-
-library(ROCR)
-
+#predictVars <- !(names(train_svm_indep %in% c("defaulted"))
+train.svm.pred <- predict(train.svm.fit, train_svm[1:9337,], probability = TRUE)
 svm.train.pred <- prediction(as.numeric(train.svm.pred),
-                             as.numeric(train_svmVars$defaulted))
+                             as.numeric(train_svm_response[1:9337]))
 #plot ROC
 svm.train.roc <- performance(svm.train.pred, measure = "tpr", x.measure = "fpr")
 plot(svm.train.roc,colorize=FALSE, col="black") # plot ROC curve
 lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-
 svm.train.auc <- performance(svm.train.pred, measure = "auc")
 svm.train.auc@y.values
+
+test.svm.pred <- predict(train.svm.fit, test_svm_indep)
+test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                             as.numeric(test_svm_response))
+#plot ROC
+svm.test.roc <- performance(svm.test.pred, measure = "tpr", x.measure = "fpr")
+plot(svm.test.roc,colorize=FALSE, col="black") # plot ROC curve
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+svm.test.auc <- performance(svm.test.pred, measure = "auc")
+svm.test.auc@y.values
+
+
+##LOL
+
+test.svm.pred <- predict(train.svm.fit, train_svm[10000:12500,])
+test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                             as.numeric(train_svm_response[10000:12500]))
+#plot ROC
+svm.test.roc <- performance(test.svm.pred, measure = "tpr", x.measure = "fpr")
+plot(svm.test.roc,colorize=FALSE, col="black") # plot ROC curve
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+svm.test.auc <- performance(test.svm.pred, measure = "auc")
+svm.test.auc@y.values
 ```
 
 
 Cox Regression Model
 ```{r}
+
+#log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS
 
 #everything in the myData (using test_pruned to quantify/evalute errors in the model that trained_pruned)
 #one run through (complex) using coxph
@@ -1330,15 +732,14 @@ train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
 
 train_pruned_surv$status <- train_pruned_surv$GrossChargeOffAmount == 0
 train_pruned_surv$EndDate <- train_pruned_surv$ChargeOffDate
-train_pruned_surv$EndDate[train_pruned_surv$status == TRUE] <- as.Date('1/1/2016', format="%m/%d/%y")
+train_pruned_surv$EndDate[train_pruned_surv$status == TRUE] <- as.factor('1/1/2016')
+as.Date('1/2/2016', format="%m/%d/%y")
 train_pruned_surv$years <- (as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate))) / 365
 
 #Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
 #coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~x, data=train_pruned_surv)
 summary(coxfit1)
-survfit(coxfit1, 
+survfit(coxfit1, )
 
 
 ```
-
->>>>>>> 8b044876ea388de5a58633d41839e5a353dadf86
