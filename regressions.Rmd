@@ -218,37 +218,52 @@ glm.fit <- glm(defaulted~., data = glm_train_indep, family = binomial)
 glm.probs <- predict.glm(glm.fit, newdata = glm_train_indep, type = "response")
 glm.train.pred <- prediction(glm.probs, train_pruned$defaulted)
 
+
+glm.probs.test <- predict.glm(glm.fit, newdata=glm_test_indep, type="response")
+glm.test.pred <- prediction(glm.probs.test, test_pruned$defaulted)
+
+
 # get statistics on the model
 
 #roc
 glm.train.perf <- performance(glm.train.pred, measure = "tpr", x.measure = "fpr")
-plot(glm.train.perf,colorize=FALSE, col="black") # plot ROC curve
+glm.test.perf <- performance(glm.test.pred, measure="tpr", x.measure="fpr")
+plot(glm.train.perf,colorize=FALSE, col="black", main="ROC Curve - Logistic Regression") # plot ROC curve
+plot(glm.test.perf,colorize=FALSE, col="red", add=TRUE)
 lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+legend("bottomright", cex=0.75, c("In-sample","Out-of-sample"), lty=c(1,1), lwd=c(2.5,2.5), col=c("black","red"))
 
 #accuracy
 glm.train.err <- performance(glm.train.pred, measure = "err")
-plot(glm.train.err, col = "red")
+plot(glm.train.err, col = "black", xlim=c(0,.5), xlab="Threshold", main="Error Rate vs Threshold - Logistic Regression (train)")
 glm.train.fpr <- performance(glm.train.pred, measure = "fpr")
-plot(glm.train.fpr, add=TRUE, col = "green")
+plot(glm.train.fpr, add=TRUE, col = "red")
 glm.train.fnr <- performance(glm.train.pred, measure = "fnr")
 plot(glm.train.fnr, add=TRUE, col = "blue")
 
+legend("topright", cex = 0.75,
+       c("Total Error Rate","False Positive Rate","False Negative Rate"),
+       lty=c(1,1,1), # gives the legend appropriate symbols (lines)
+       lwd=c(2.5,2.5,2.5),col=c("black","red","blue"))
 
-glm.test.probs <- predict.glm(glm.fit, newdata = glm_test_indep, type = "response")
-glm.test.pred <- prediction(glm.test.probs, test_pruned$defaulted)
 
 glm.test.err <- performance(glm.test.pred, measure = "err")
-plot(glm.test.err, col = "black", xlim=c(0,.5), xlab = "Threshold")
+plot(glm.test.err, col = "black", xlim=c(0,.5), xlab = "Threshold", main="Error Rate vs Threshold - Logistic Regression (test)")
 glm.test.fpr <- performance(glm.test.pred, measure = "fpr")
 plot(glm.test.fpr, add=TRUE, col = "red", lty = 3)
 glm.test.fnr <- performance(glm.test.pred, measure = "fnr")
 plot(glm.test.fnr, add=TRUE, col = "blue", lty=2)
 
-legend("top", cex = .5,
+legend("topright", cex = .75,
        c("Total Error Rate","False Positive Rate","False Negative Rate"),
        lty=c(1,1,1), # gives the legend appropriate symbols (lines)
        lwd=c(2.5,2.5,2.5),col=c("black","red","blue"))
 
+#AUC
+logit.train.auc <- performance(glm.train.pred, measure="auc")
+logit.test.auc <- performance(glm.test.pred, measure = "auc")
+logit.test.auc@y.values
+logit.train.auc@y.values
 ```
 
 stepwise model selection with logistic regression
@@ -284,40 +299,6 @@ back.step.test.tpr <- performance(back.step.test.prediction, measure = "tpr")
 back.step.test.tpr@y.values
 ```
 
-
-
-Bootstrapping (not really used yet)!
-```{r}
-
-# Bootstrap 95% CI for regression coefficients (not needed?)
-library(boot)
-# function to obtain regression weights 
-bs <- function(formula, data, indices) {
-  d <- data[indices,] # allows boot to select sample
-  fit <- lm(formula, data=d)
-  return(coef(fit))
-} 
-# bootstrapping with 1000 replications 
-#results <- boot(data=glm_train_indep, statistic=bs, 
-#    R=1000, formula=defaulted~HousingPriceIndex+FEDFUNDS+UnemploymentRa#te)
-results <- boot(data=glm_train_indep, statistic=bs, 
-  	R=1000, formula=defaulted~.)
-
-# view results
-results
-plot(results, index=1) # intercept
-plot(results, index=2) # HPI
-plot(results, index=3) # FEDFUNDS
-plot(results, index=4) # UnemploymentRate
-
-# get 95% confidence intervals 
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=1) # intercept
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=2) # HPI
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=3) # FEDFUNDS
-boot.ci(results, conf = 0.95, type=c("norm","perc"), index=4) # Unemployment
-
-```
-
 3/2 from Frank
 ```{r}
 library(glmnet)
@@ -328,6 +309,7 @@ test_indep <- test_pruned[, indepVars]
 set.seed(2123)
 # Produce a Lasso CV fit
 lasso.cv <- cv.glmnet(x=data.matrix(train_indep), y=train_pruned$defaulted, family = "binomial")
+#plot(lasso.cv, main="L1-Regularized Logistic Regression")\
 plot(lasso.cv)
 # Use the 1 standard-error rule to pick lambda
 lambda_1se <- lasso.cv$lambda.1se
@@ -353,18 +335,30 @@ test.phat <- predict(lasso.cv,
                   s="lambda.1se",
                   type = "response")
 test.pred <- prediction(test.phat, test_pruned$defaulted)
+
+train.phat <- predict(lasso.cv, newx=data.matrix(train_indep),s="lambda.1se",type="response")
+train.pred <- prediction(train.phat, train_pruned$defaulted)
   # Obtain performance statistics
   # Plot ROC
   test.roc <- performance(test.pred, measure = "tpr", x.measure = "fpr")
-  plot(test.roc,colorize=FALSE, col="black")
+  train.roc <- performance(train.pred, measure="tpr", x.measure="fpr")
+  plot(test.roc,colorize=FALSE, col="red", main="ROC Curve - Logistic Regression w/ Lasso")
+  plot(train.roc,colorize=FALSE, col="black", add=TRUE)
   lines(c(0,1),c(0,1),col = "gray", lty = 4 )  
+  legend("bottomright", cex=0.75, c("In-sample","Out-of-sample"), lty=c(1,1), lwd=c(2.5,2.5), col=c("black","red"))
+  
+lasso.train.auc <- performance(train.pred, measure = "auc")
+lasso.train.auc@y.values
+
+lasso.test.auc <- performance(test.pred, measure = "auc")
+lasso.test.auc@y.values
 
 test.cost<- performance(test.pred, "cost")
 optimal_cutoff <- test.pred@cutoffs[[1]][which.min(test.cost@y.values[[1]])]
 ```
 
 
-VaR calculations, (& bootstrap?)
+VaR calculations, + bootstrap
 ```{r}
 library(glmnet)
 library(stats)
@@ -419,7 +413,7 @@ random_sample.probs <- predict(lasso.cv,
   #                s="lambda.1se",
   #                type = "response")
   
-for(i in 1:5000) {
+for(i in 1:20000) {
   random_sample.bin <- rbinom(poolSize, 1, random_sample.probs)
   #all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
   sample.defaults <- random_sample[ which(random_sample.bin == TRUE),]
@@ -430,32 +424,70 @@ for(i in 1:5000) {
   lossVector[i] <- total.loss
 }
 #make histogram
-defaulthist <- hist(defaultVector)
-hist1 <- hist(lossVector)
-VaRhistorical(-lossVector)
-EShistorical(-lossVector)
+sample_sd <- sd(-lossVector)
+sample_mean <- mean(-lossVector)
+sample_size <- length(lossVector)
 
+#use Diaconis-Freedman formula to calculate optimal number of bins for histogram
+default.bins <- ceiling((max(defaultVector)-min(defaultVector))/((2*IQR(defaultVector))/((sample_size)^(1/3))))
+defaulthist <- hist(defaultVector, breaks=default.bins, main="Defaults Distribution")
+
+loss.bins <- ceiling((max(lossVector)-min(lossVector))/((2*IQR(lossVector))/((sample_size)^(1/3))))
+hist1 <- hist(lossVector, breaks=loss.bins, main="Total Loss Distribution")
+lines(density(lossVector, adjust=2), col = "darkblue", lwd=2)
+#plot(dnorm(x, mean(lossVector), sd(lossVector)), add=TRUE, col="darkblue", lwd=2)
+
+numIterations <- 20000
+varLevel <- 0.99
+lossVector <- sort(lossVector)
+##MAKE SURE TO SORT THE LOSS VECTOR FIRST (ASCENDING)
+#for 95% CI
+confIntBounds <- qbinom(c(.025,.975), numIterations, 0.95)
+a <- lossVector[confIntBounds[1]]
+b <- lossVector[confIntBounds[2]]
+#for 99% CI
+confIntBounds_1 <- qbinom(c(.005,.995), numIterations, 0.99)
+a1 <- lossVector[confIntBounds_1[1]]
+b1 <- lossVector[confIntBounds_1[2]]
+
+var.calc <- VaRhistorical(-lossVector)
+es.calc <- EShistorical(-lossVector)
+
+#set prob=.01 for 99% confidence intervals
 VaRhistorical <- function(returnVector, prob=.05, 
-    notional=1, digits=2) 
+    notional=1, digits=4) 
 {
   if(prob > .5) prob <- 1 - prob
   ans <- -quantile(returnVector, prob) * notional
   signif(ans, digits=digits)
 }
 
-EShistorical <- function(returnVector, prob=.05, 
-    notional=1, digits=2) 
+#set prob=.01 for 99% confidence intervals
+EShistorical <- function(returnVector, indices, prob=.05, 
+    notional=1, digits=4)
 {
   if(prob > .5) prob <- 1 - prob
-  v <- quantile(returnVector, prob)
-  ans <- -mean(returnVector[returnVector <= v]) * 
-      notional
-  signif(ans, digits=digits)
+  d <- returnVector[indices]
+  v <- quantile(d, prob)
+  ans <- -mean(d[d <= v]) * notional
+  return(signif(ans, digits=digits))
 }
+
+# Bootstrap 95% CI for regression coefficients - for average VaR
+library(boot)
+# bootstrapping with 1000 replications 
+results <- boot(data=-lossVector, statistic=EShistorical, 
+  	R=1000)
+# view results
+results
+plot(results, index=1) # intercept
+
+# get 95%/99% confidence intervals
+boot.ci(results, conf = 0.99, type=c("norm"), index=1) # intercept
 
 ```
 
-Now for some LDA, with an ROC curve?????:
+Now for some LDA, with an ROC curve?:
 
 ```{r}
 CLASSIFICATION_THRESHOLD = 0.5
@@ -484,6 +516,57 @@ lda.pred.t = sum(lda.fit.predict$posterior[,2] >= CLASSIFICATION_THRESHOLD)
 lda.pred.f = sum(lda.fit.predict$posterior[,2] < CLASSIFICATION_THRESHOLD)
 print(lda.pred.t)
 print(lda.pred.f)
+
+#Plot ROC Curve for LDA
+confusion <- function(actual, predicted, names = NULL, printit = TRUE,
+ prior = NULL) {
+ if (is.null(names))
+ names <- levels(actual)
+ tab <- table(actual, predicted)
+ acctab <- t(apply(tab, 1, function(x) x/sum(x)))
+ dimnames(acctab) <- list(Actual = names, "Predicted (cv)" = names)
+ if (is.null(prior)) {
+ relnum <- table(actual)
+ prior <- relnum/sum(relnum)
+ acc <- sum(tab[row(tab) == col(tab)])/sum(tab)
+ }
+ else {
+ acc <- sum(prior * diag(acctab))
+ names(prior) <- names
+ }
+ if (printit)
+ print(round(c("Overall accuracy" = acc, "Prior frequency" = prior),
+ 4))
+ if (printit) {
+ cat("\nConfusion matrix", "\n")
+ print(round(acctab, 4))
+ }
+ invisible(acctab)
+}
+library(MASS)
+falsepos <- numeric(19)
+truepos <- numeric(19)
+falsepos2 <- numeric(19)
+truepos2 <- numeric(19)
+p1 <- (1:19)/20
+for (i in 1:19) {
+    p <- p1[i]
+    lda.fit1= lda(defaulted~log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = train_pruned, CV= TRUE, prior = c(p,1-p))
+    lda.fit2= lda(defaulted~log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = test_pruned, CV= TRUE, prior = c(p,1-p))
+    #lda.fit1= lda(defaulted~., data = train_pruned, CV= TRUE, prior = c(p,1-p))
+    confmat <- confusion(train_pruned$defaulted, lda.fit1$class, printit= FALSE)
+    falsepos[i] <- confmat[1, 2]
+    truepos[i] <- confmat[2, 2]
+    confmat2 <- confusion(test_pruned$defaulted, lda.fit2$class, printit= FALSE)
+    falsepos2[i] <- confmat2[1, 2]
+    truepos2[i] <- confmat2[2, 2]
+}
+plot(truepos ~ falsepos, type = "l", xlab = "False positive rate",
+ylab = "True positive rate", main = "ROC Curve - LDA", col = "black")
+lines(truepos2 ~ falsepos2, type = "l", col = "red")
+library(pracma)
+lda_train_auc = -1*trapz(falsepos,truepos)
+lda_test_auc = -1*trapz(falsepos2,truepos2)
 
 ```
 
