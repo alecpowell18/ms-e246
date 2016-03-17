@@ -1308,4 +1308,37 @@ lines(c(0,1),c(0,1),col = "gray", lty = 4 )
 svm.train.auc <- performance(svm.train.pred, measure = "auc")
 svm.train.auc@y.values
 ```
+
+
+Cox Regression Model
+```{r}
+
+#everything in the myData (using test_pruned to quantify/evalute errors in the model that trained_pruned)
+#one run through (complex) using coxph
+#format data in the proper way in order to fit it into the coxph package -> hazard model
+#variables: train_pruned, test_pruned
+#
+#we're feeding train_pruned into some function to produce a model (this will coxph). We feed test_pruned into the model to produce metrics
+#model of time to default. Try using all the variables
+#merge extra data if time available
+
+
+library(survival)
+drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
+
+train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
+
+train_pruned_surv$status <- train_pruned_surv$GrossChargeOffAmount == 0
+train_pruned_surv$EndDate <- train_pruned_surv$ChargeOffDate
+train_pruned_surv$EndDate[train_pruned_surv$status == TRUE] <- as.Date('1/1/2016', format="%m/%d/%y")
+train_pruned_surv$years <- (as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate))) / 365
+
+#Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
+#coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~x, data=train_pruned_surv)
+summary(coxfit1)
+survfit(coxfit1, 
+
+
+```
+
 >>>>>>> 8b044876ea388de5a58633d41839e5a353dadf86
