@@ -378,7 +378,8 @@ allDefaults_indep <- allDefaults[, indepVars]
 chargeoff_train_indep <- chargeoff_train[, indepVars]
 chargeoff_test_indep <- chargeoff_test[, indepVars]
 
-lossGivenDefault <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train$GrossChargeOffAmount)
+def_grid = 10^seq(6,-3,length=200)
+lossGivenDefault <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train$GrossChargeOffAmount, lambda = def_grid)
 plot(lossGivenDefault)
 
 #evaluate train error
@@ -496,34 +497,163 @@ library(rpart)
 
 svm_indepVars <- !(names(train_pruned) %in% c("GrossChargeOffAmount", "defaulted"))
 train_svm_indep <- train_pruned[svm_indepVars]
-
 train_svm_indep <- as.matrix(train_svm_indep)
 train_svm_response <- as.factor(train_pruned$defaulted)
-
 train_svm <- data.frame(train_svm_indep, defaulted=train_svm_response)
 View(train_svm)
 
-#train_svmVars$defaulted <- as.factor(train_svmVars$defaulted)
-#train_svmVars$defaulted[train_svmVars$defaulted == 0] <- -1
+test_svm_indep <- test_pruned[svm_indepVars]
+test_svm_indep <- as.matrix(test_svm_indep)
+test_svm_response <- as.factor(test_pruned$defaulted)
+test_svm <- data.frame(test_svm_indep, defaulted=test_svm_response)
 
-train.svm.fit <- svm(defaulted ~ ., data = train_svm,
-                 cost = 10,
-                 class.weights = c("TRUE" = .85, "FALSE" = .15))
+train_svm_radial_predictions <- vector()
+test_svm_radial_predictions <- vector()
+train.svm.models <- vector()
+for (i in 1:3){
+  train.svm.fit <- svm(defaulted ~ ., data = train_svm,
+                 cost = 10 * (10^i),
+                 class.weights = c("TRUE" = .85, "FALSE" = .15),
+                 kernel = "radial",
+                 probability = TRUE)
+  train.svm.models[i] <- train.svm.fit
+  
+  #predictVars <- !(names(train_svm_indep %in% c("defaulted"))
+  train.svm.pred <- predict(train.svm.fit, train_svm_indep, probability = TRUE)
+  svm.train.pred <- prediction(as.numeric(train.svm.pred),
+                               as.numeric(train_svm_response))
+  
+  train_svm_radial_predictions[i] <- svm.train.pred
+  
+  
+  test.svm.pred <- predict(train.svm.fit, test_svm_indep, probability = TRUE)
+  test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                               as.numeric(test_svm_response))
+  
+  test_svm_radial_predictions[i] <- test.svm.pred
+}
+
+
+poly.svm.train.grid <- matrix(nrow=3, ncol=3)
+poly.svm.test.grid <- matrix(nrow=3, ncol=3)
+#cost
+for (i in 1:3){
+  #coef0
+  for(j in 1:3){
+    train.svm.fit <- svm(defaulted ~ ., data = train_svm,
+                 cost = .01 * (10 ^ i),
+                 coef0 = .01 * (10 ^ j),
+                 class.weights = c("TRUE" = .85, "FALSE" = .15),
+                 kernel = "polynomial",
+                 probability = TRUE)
+
+  #predictVars <- !(names(train_svm_indep %in% c("defaulted"))
+  train.svm.pred <- predict(train.svm.fit, train_svm_indep, probability = TRUE)
+  svm.train.pred <- prediction(as.numeric(train.svm.pred),
+                               as.numeric(train_svm_response))
+  poly.svm.train.grid[i][j] <- svm.train.pred
+  
+  test.svm.pred <- predict(train.svm.fit, test_svm_indep, probability = TRUE)
+  test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                               as.numeric(test_svm_response))
+  poly.svm.test.grid[i][j] <- test.svm.pred
+  }
+}
+
+radial001 <- train.svm.pred
+radial0001 <- train.svm.pred
+radial01 <- train.svm.pred
+
+rradial01 <- prediction(as.numeric(radial01),
+                             as.numeric(train_svm_response[1:9337]))
+rradial001 <- prediction(as.numeric(radial001),
+                             as.numeric(train_svm_response[1:9337]))
+rradial0001 <- prediction(as.numeric(radial0001),
+                             as.numeric(train_svm_response[1:9337]))
+
+sv.r.01 <- performance(rradial01, measure = "tpr", x.measure = "fpr")
+sv.r.001 <- performance(rradial001, measure = "tpr", x.measure = "fpr")
+sv.r.0001 <- performance(rradial0001, measure = "tpr", x.measure = "fpr")
+
+plot(sv.r.01, col="black", main = "SVM Model w/ Varying Cost") # plot ROC curve
+plot(sv.r.001, col="blue", add=T) # plot ROC curve
+plot(sv.r.0001, col="red", add=T) # plot ROC curve
+legend("top", cex = .5,
+       c("radial kernel, C = .01","radial kernel, C = .001","radial kernel, C = .0001"),
+       lty=c(1,1,1), # gives the legend appropriate symbols (lines)
+       lwd=c(2.5,2.5,2.5),col=c("black","blue","red"))
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+train.svm.fit <- svm(defaulted ~ ., data = train_svm[1:9337,],
+                 cost = .01,
+                 class.weights = c("TRUE" = .85, "FALSE" = .15),
+                 kernel = "radial",
+                 probability = TRUE)
 
 print(train.svm.fit)
 
-predictVars <- !(names(train_svmVars) %in% c("defaulted"))
-train.svm.pred <- predict(train.svm, train_svmVars[,predictVars])
-
-library(ROCR)
-
+#predictVars <- !(names(train_svm_indep %in% c("defaulted"))
+train.svm.pred <- predict(train.svm.fit, train_svm[1:9337,], probability = TRUE)
 svm.train.pred <- prediction(as.numeric(train.svm.pred),
-                             as.numeric(train_svmVars$defaulted))
+                             as.numeric(train_svm_response[1:9337]))
 #plot ROC
 svm.train.roc <- performance(svm.train.pred, measure = "tpr", x.measure = "fpr")
 plot(svm.train.roc,colorize=FALSE, col="black") # plot ROC curve
 lines(c(0,1),c(0,1),col = "gray", lty = 4 )
-
 svm.train.auc <- performance(svm.train.pred, measure = "auc")
 svm.train.auc@y.values
+
+test.svm.pred <- predict(train.svm.fit, test_svm_indep)
+test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                             as.numeric(test_svm_response))
+#plot ROC
+svm.test.roc <- performance(svm.test.pred, measure = "tpr", x.measure = "fpr")
+plot(svm.test.roc,colorize=FALSE, col="black") # plot ROC curve
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+svm.test.auc <- performance(svm.test.pred, measure = "auc")
+svm.test.auc@y.values
+
+
+##LOL
+
+test.svm.pred <- predict(train.svm.fit, train_svm[10000:12500,])
+test.svm.pred <- prediction(as.numeric(test.svm.pred),
+                             as.numeric(train_svm_response[10000:12500]))
+#plot ROC
+svm.test.roc <- performance(test.svm.pred, measure = "tpr", x.measure = "fpr")
+plot(svm.test.roc,colorize=FALSE, col="black") # plot ROC curve
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+svm.test.auc <- performance(test.svm.pred, measure = "auc")
+svm.test.auc@y.values
+```
+
+```{r}
+
+#everything in the myData (using test_pruned to quantify/evalute errors in the model that trained_pruned)
+#one run through (complex) using coxph
+#format data in the proper way in order to fit it into the coxph package -> hazard model
+#variables: train_pruned, test_pruned
+#
+#we're feeding train_pruned into some function to produce a model (this will coxph). We feed test_pruned into the model to produce metrics
+#model of time to default. Try using all the variables
+#merge extra data if time available
+
+
+library(survival)
+drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
+
+train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
+
+train_pruned_surv$status <- train_pruned_surv$GrossChargeOffAmount == 0
+train_pruned_surv$EndDate <- train_pruned_surv$ChargeOffDate
+train_pruned_surv$EndDate[train_pruned_surv$status == TRUE] <- as.Date('1/1/2016', format="%m/%d/%y")
+train_pruned_surv$years <- (as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate))) / 365
+
+#Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
+#coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~x, data=train_pruned_surv)
+summary(coxfit1)
+survfit(coxfit1, 
+
+
+
 ```
