@@ -13,7 +13,7 @@ Make/merge datasets
 ```{r}
 mydata <- read.csv("SBA_Loan_data.csv")
 # Making new column for default status
-mydata$defaulted <- mydata$GrossChargeOffAmount > 0
+mydata$defaulted <- mydata$LoanStatus == "CHGOFF"
 #take out status=EXEMPT and status=CANCLD
 mydata <- subset(mydata, LoanStatus!="EXEMPT"&LoanStatus!="CANCLD"&!is.na(BusinessType))
 #find loans where term is (not) yearly
