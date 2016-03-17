@@ -715,31 +715,32 @@ Cox Regression Model
 
 #log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS
 
-#everything in the myData (using test_pruned to quantify/evalute errors in the model that trained_pruned)
-#one run through (complex) using coxph
-#format data in the proper way in order to fit it into the coxph package -> hazard model
-#variables: train_pruned, test_pruned
-#
-#we're feeding train_pruned into some function to produce a model (this will coxph). We feed test_pruned into the model to produce metrics
-#model of time to default. Try using all the variables
-#merge extra data if time available
-
-
 library(survival)
 drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
 
 train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
 
-train_pruned_surv$status <- train_pruned_surv$GrossChargeOffAmount == 0
-train_pruned_surv$EndDate <- train_pruned_surv$ChargeOffDate
-train_pruned_surv$EndDate[train_pruned_surv$status == TRUE] <- as.factor('1/1/2016')
-as.Date('1/2/2016', format="%m/%d/%y")
-train_pruned_surv$years <- (as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate))) / 365
+train_pruned_surv$EndDate <- as.Date(train_pruned_surv$ChargeOffDate, format="%m/%d/%y")
+train_pruned_surv$status <- is.na(train_pruned_surv$EndDate)
 
-#Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
-#coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~x, data=train_pruned_surv)
+train_pruned_surv$EndDate[which(train_pruned_surv$status == 1)] <- as.Date('3/15/16', format="%m/%d/%y")
+
+train_pruned_surv$YearsBeforeDefault <-(as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y")) / 365
+
+
+train_pruned_surv$YearsBeforeDefault <- difftime(train_pruned_surv$EndDate,as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
+
+
+Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
+coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval, data=train_pruned_surv)
 summary(coxfit1)
-survfit(coxfit1, )
+coxfit2 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS, data=train_pruned_surv)
+summary(coxfit2)
+coxfit3 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS+UnemploymentRate, data=train_pruned_surv)
+summary(coxfit3)
+coxfit4 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS+UnemploymentRate+PublicDebt.GDP, data=train_pruned_surv)
+summary(coxfit4)
+
 
 
 ```
