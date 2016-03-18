@@ -717,22 +717,24 @@ Cox Regression Model
 
 library(survival)
 drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
-
 train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
+test_pruned_surv <- test[,!(names(test) %in% drops_surv)]
+#get independent variables 
+indep_surv_vars = !(names(train_pruned_surv) %in% c("ApprovalFiscalYear", "ApprovalDate", "ChargeOffDate", "defaulted", "status", "EndDate", "YearsBeforeDefault"))
+train_surv_indep <- train_pruned_surv[,indep_surv_vars]
+test_surv_indep <- test_pruned_surv[,indep_surv_vars]
 
 train_pruned_surv$EndDate <- as.Date(train_pruned_surv$ChargeOffDate, format="%m/%d/%y")
 train_pruned_surv$status <- is.na(train_pruned_surv$EndDate)
-
 train_pruned_surv$EndDate[which(train_pruned_surv$status == 1)] <- as.Date('3/15/16', format="%m/%d/%y")
-
-train_pruned_surv$YearsBeforeDefault <-(as.Date(as.character(train_pruned_surv$EndDate), format = "%m/%d/%y")-as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y")) / 365
-
 
 train_pruned_surv$YearsBeforeDefault <- difftime(train_pruned_surv$EndDate,as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
 
-
-Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), as.numeric(train_pruned_surv$status))
+y <- Surv(as.numeric(train_pruned_surv$YearsBeforeDefault),train_pruned_surv$status)
 coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval, data=train_pruned_surv)
+
+fit = glmnet(data.matrix(train_surv_indep), y, family="cox")
+
 summary(coxfit1)
 coxfit2 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS, data=train_pruned_surv)
 summary(coxfit2)
@@ -740,6 +742,7 @@ coxfit3 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pr
 summary(coxfit3)
 coxfit4 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS+UnemploymentRate+PublicDebt.GDP, data=train_pruned_surv)
 summary(coxfit4)
+
 
 
 
