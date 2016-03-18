@@ -371,27 +371,47 @@ allDefaults_indep <- allDefaults[, indepVars]
 chargeoff_train_indep <- chargeoff_train[, indepVars]
 chargeoff_test_indep <- chargeoff_test[, indepVars]
 
-lossGivenDefault <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train$GrossChargeOffAmount)
-plot(lossGivenDefault)
+chargeoff_train_zeros <- chargeoff_train$GrossChargeOffAmount == 0
+chargeoff_test_zeros <- chargeoff_test$GrossChargeOffAmount == 0
 
-#evaluate train error
-chargeoff_train_phat <- predict(lossGivenDefault, newx=data.matrix(chargeoff_train_indep), s="lambda.1se", type = "response")
-chargeoff_train_error <- mean((chargeoff_train_phat - chargeoff_train$GrossChargeOffAmount)^2)
-print(chargeoff_train_error)
-#evaluate test error
-chargeoff_test_phat <- predict(lossGivenDefault, newx=data.matrix(chargeoff_test_indep), s="lambda.1se")
-chargeoff_test_error <- mean((chargeoff_test_phat - chargeoff_test$GrossChargeOffAmount)^2)
-print(chargeoff_test_error)
+hadZeroChargeOff <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train_zeros)
+train_zero_pred <- prediction(predict(hadZeroChargeOff, newx=data.matrix(chargeoff_train_indep), s="lambda.1se", type = "response"), chargeoff_train_zeros)
+train_zero_roc <- performance(train_zero_pred, measure = "tpr", x.measure = "fpr")
+plot(train_zero_roc, col = "blue")
+train_zero_auc <- performance(train_zero_pred, measure = "auc")
+train_zero_auc@y.values
+
+test_zero_pred <- prediction(predict(hadZeroChargeOff, newx=data.matrix(chargeoff_test_indep), s="lambda.1se", type = "response"), chargeoff_test_zeros)
+test_zero_roc <- performance(test_zero_pred, measure = "tpr", x.measure = "fpr")
+plot(test_zero_roc, col = "red", add = T)
+test_zero_auc <- performance(test_zero_pred, measure = "auc")
+test_zero_auc@y.values
+
+#Predicting Chargeoff Amount of defaulted loans who had a nonzero charge off
+train_nonzero_indep <- chargeoff_train_indep[which(chargeoff_train$GrossChargeOffAmount > 0),]
+test_nonzero_indep <- chargeoff_test_indep[which(chargeoff_test$GrossChargeOffAmount > 0),]
+
+train_ChargeApproveRatio <- (chargeoff_train$GrossChargeOffAmount / chargeoff_train$GrossApproval)[which(chargeoff_train$GrossChargeOffAmount > 0)]
+test_ChargeApproveRatio <- (chargeoff_test$GrossChargeOffAmount / chargeoff_test$GrossApproval)[which(chargeoff_test$GrossChargeOffAmount > 0)]
+
+lossGivenDefault <- cv.glmnet(x = data.matrix(train_nonzero_indep), y = train_ChargeApproveRatio)
+plot(lossGivenDefault)
+train_chargeoff_pred <- predict(lossGivenDefault, newx=data.matrix(train_nonzero_indep), s = "lambda.1se")
+train_chargeoff_error <- mean((train_chargeoff_pred - train_ChargeApproveRatio)^2)
+train_chargeoff_error
+test_chargeoff_pred <- predict(lossGivenDefault, newx=data.matrix(test_nonzero_indep), s = "lambda.1se")
+test_chargeoff_error <- mean((test_chargeoff_pred - test_ChargeApproveRatio)^2)
+test_chargeoff_error
 
 #see how the simple linear regression model works
-chargeoff_lm <- lm(GrossChargeOffAmount ~., data = chargeoff_train[,!(names(chargeoff_train) %in% c("defaulted"))])
-chargeoff_lm_predict <- predict(chargeoff_lm, newx = chargeoff_train)
-print(mean((chargeoff_lm_predict - chargeoff_train$GrossChargeOffAmount)^2))
+chargeoff_lm <- lm(train_ChargeApproveRatio ~., data = train_nonzero_indep)
+train_chargeoff_predict <- predict(chargeoff_lm, newx = train_nonzero_indep)
+print("train error is: ")
+print(mean((train_chargeoff_predict - train_ChargeApproveRatio)^2))
 
-lossGivenDefault_final <- cv.glmnet(x = data.matrix(allDefaults_indep), y = allDefaults$GrossChargeOffAmount)
-chargeoff_phat <- predict(lossGivenDefault_final, newx=data.matrix(allDefaults_indep), s="lambda.1se")
-chargeoff_test_error <- mean((chargeoff_phat - allDefaults$GrossChargeOffAmount)^2)
-print(chargeoff_error)
+test_chargeoff_predict <- predict(chargeoff_lm, newx = test_nonzero_indep)
+print("test error is: ")
+print(mean((test_chargeoff_predict - test_ChargeApproveRatio)^2))
 
 
 defaultVector <- vector()
@@ -418,7 +438,7 @@ for(i in 1:20000) {
   sample.defaults <- random_sample[ which(random_sample.bin == TRUE),]
   defaultVector[i] <- nrow(sample.defaults)
   
-  losses <- predict(lossGivenDefault_final, newx=data.matrix(sample.defaults), s="lambda.1se")
+  losses <- predict(lossGivenDefault, newx=data.matrix(sample.defaults), s="lambda.1se")
   total.loss <- sum(losses)
   lossVector[i] <- total.loss
 }
@@ -713,7 +733,7 @@ Cox Regression Model
 ```{r}
 
 #log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS
-
+library(glmnet)
 library(survival)
 drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
 train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
@@ -732,8 +752,9 @@ train_pruned_surv$YearsBeforeDefault <- difftime(train_pruned_surv$EndDate,as.Da
 y <- Surv(as.numeric(train_pruned_surv$YearsBeforeDefault),train_pruned_surv$status)
 coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval, data=train_pruned_surv)
 
-fit = glmnet(data.matrix(train_surv_indep), y, family="cox")
+fit = cv.glmnet(data.matrix(train_surv_indep), y, family="cox")
 
+coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval, data=train_pruned_surv)
 summary(coxfit1)
 coxfit2 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS, data=train_pruned_surv)
 summary(coxfit2)
