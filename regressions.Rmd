@@ -486,8 +486,13 @@ random_sample.probs <- predict(lasso.cv,
                 s="lambda.1se",
                 type = "response")
 
+get.default.probs <- function(pool, cox_coef, t){
+  hazard <- exp(data.matrix(pool) %*% cox_coef)
+  return(1 - exp(-1 * hazard * t))
+}
+
 #Using Cox regression
-#random_sample <-selected_surv_indep[sample_indices, ]
+random_sample <-selected_surv_indep[sample_indices, ]
 # On 1 year horizon
 #random_sample.probs <- get.default.probs(random_sample, betas, 1)
 # On 5 year horizon
