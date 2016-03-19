@@ -487,9 +487,9 @@ random_sample.probs <- predict(lasso.cv,
                 type = "response")
 
 #Using Cox regression
-random_sample <-selected_surv_indep[sample_indices, ]
+#random_sample <-selected_surv_indep[sample_indices, ]
 # On 1 year horizon
-random_sample.probs <- get.default.probs(random_sample, betas, 1)
+#random_sample.probs <- get.default.probs(random_sample, betas, 1)
 # On 5 year horizon
 random_sample.probs <- get.default.probs(random_sample, betas, 5)
 
