@@ -295,7 +295,7 @@ back.step.test.auc <- performance(back.step.test.prediction, measure = "auc")
 back.step.test.auc@y.values
 
 back.step.test.tpr <- performance(back.step.test.prediction, measure = "tpr")
-back.step.test.tpr@y.values
+back.step.test.tpr@y.valuesb
 ```
 
 3/2 from Frank
@@ -304,6 +304,7 @@ library(glmnet)
 indepVars <- !(names(train_pruned) %in% c("defaulted", "GrossChargeOffAmount"))
 train_indep <- train_pruned[, indepVars]
 test_indep <- test_pruned[, indepVars]
+all_glmnet_indep <- rbind(train_indep, test_indep)
 # Control randomness in Lasso CV fit
 set.seed(2123)
 # Produce a Lasso CV fit
@@ -354,6 +355,62 @@ lasso.test.auc@y.values
 
 test.cost<- performance(test.pred, "cost")
 optimal_cutoff <- test.pred@cutoffs[[1]][which.min(test.cost@y.values[[1]])]
+```
+
+
+
+Cox Regression Model
+```{r}
+
+#log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS
+library(glmnet)
+library(survival)
+library(peperr)
+library(c060)
+
+drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
+train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
+test_pruned_surv <- test[,!(names(test) %in% drops_surv)]
+
+#get independent variables 
+indep_surv_vars = !(names(train_pruned_surv) %in% c("ApprovalFiscalYear", "ApprovalDate", "ChargeOffDate", "defaulted", "status", "EndDate", "YearsBeforeDefault"))
+train_surv_indep <- train_pruned_surv[,indep_surv_vars]
+test_surv_indep <- test_pruned_surv[,indep_surv_vars]
+
+#format the data for the the survival analysis
+train_pruned_surv$EndDate <- as.Date(train_pruned_surv$ChargeOffDate, format="%m/%d/%y")
+train_pruned_surv$status <- train_pruned_surv$defaulted
+train_pruned_surv$EndDate[which(train_pruned_surv$status == 0)] <- as.Date('12/31/14', format="%m/%d/%y")
+train_pruned_surv$YearsBeforeDefault <- difftime(train_pruned_surv$EndDate,as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
+test_pruned_surv$EndDate <- as.Date(test_pruned_surv$ChargeOffDate, format="%m/%d/%y")
+test_pruned_surv$status <- test_pruned_surv$defaulted
+test_pruned_surv$EndDate[which(test_pruned_surv$status == 0)] <- as.Date('12/31/14', format="%m/%d/%y")
+test_pruned_surv$YearsBeforeDefault <- difftime(test_pruned_surv$EndDate,as.Date(as.character(test_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
+
+y <- Surv(as.numeric(train_pruned_surv$YearsBeforeDefault),train_pruned_surv$status)
+
+#fit the cox regression model with L1-regularization
+fit = cv.glmnet(data.matrix(train_surv_indep), y, family="cox")
+fit$lambda.1se
+plot(fit)
+cox_model <- glmnet(data.matrix(train_surv_indep), y, family="cox", lambda = fit$lambda.1se)
+
+#GEt the coefficients in the model post-selection, and prund the dataset to only contain these variables
+beta_pick <- which(abs(cox_model$beta) > 0)
+betas <- cox_model$beta[beta_pick]
+selected_train_surv_indep <- train_surv_indep[, beta_pick]
+selected_test_surv_indep <- test_surv_indep[, beta_pick]
+
+#USE THESE TO PLUG INTO HAZARD FUNCTION TO GET PROBABILITIES FOR THE VAR
+selected_surv_indep <- rbind(selected_train_surv_indep, selected_test_surv_indep)
+
+#get vector of probabilities
+get.default.probs <- function(pool, cox_coef, t){
+  hazard <- exp(as.matrix(pool) %*% cox_coef)
+  return(1 - exp(-1 * hazard * t))
+}
+
+
 ```
 
 
@@ -418,27 +475,37 @@ defaultVector <- vector()
 lossVector <- vector()
 
 poolSize <- 500
-##1000 iterations to get loss distribution
-random_sample <- train_indep[sample(nrow(train_indep), poolSize), ]
+
+sample_indices <- sample(nrow(selected_surv_indep), poolSize)
+zero_chargeoff_probs <- predict(hadZeroChargeOff, newx = data.matrix(all_glmnet_indep[sample_indices,]), s = "lambda.1se", type = "response")
 
 #Using lasso
+random_sample <- all_glmnet_indep[sample_indices, ]
 random_sample.probs <- predict(lasso.cv,
                 newx=data.matrix(random_sample),
                 s="lambda.1se",
                 type = "response")
-  #Using logit
-  #random_sample.probs <- predict(lasso.cv,
-  #                newx=data.matrix(random_sample),
-  #                s="lambda.1se",
-  #                type = "response")
+
+#Using Cox regression
+random_sample <-selected_surv_indep[sample_indices, ]
+# On 1 year horizon
+random_sample.probs <- get.default.probs(random_sample, betas, 1)
+# On 5 year horizon
+random_sample.probs <- get.default.probs(random_sample, betas, 5)
+
   
 for(i in 1:20000) {
   random_sample.bin <- rbinom(poolSize, 1, random_sample.probs)
+  defaulted_zero_charge_bin <- rbinom(poolSize, 1, zero_chargeoff_probs)
   #all_loss_amounts <- train_pruned[,"GrossChargeOffAmount"]
-  sample.defaults <- random_sample[ which(random_sample.bin == TRUE),]
-  defaultVector[i] <- nrow(sample.defaults)
+  
+  #effectively, we're only calculating chargeoff values for loans that
+  #are simulatd to have defaulted, and have a nonzero chargeoff
+  sample.defaults <- random_sample[ which(random_sample.bin == TRUE & defaulted_zero_charge_bin == FALSE),]
+  defaultVector[i] <- count(random_sample.bin == TRUE)
   
   losses <- predict(lossGivenDefault, newx=data.matrix(sample.defaults), s="lambda.1se")
+  losses <- losses * sample.defaults$GrossApproval
   total.loss <- sum(losses)
   lossVector[i] <- total.loss
 }
@@ -729,41 +796,12 @@ svm.test.auc@y.values
 ```
 
 
-Cox Regression Model
+Test for non-linearities
+
 ```{r}
-
-#log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS
-library(glmnet)
-library(survival)
-drops_surv <- c("Program", "BorrName","BorrStreet","BorrCity","BorrZip","CDC_Name","CDC_Street","CDC_City","CDC_Zip","ThirdPartyLender_Name","ThirdPartyLender_City","ThirdPartyLender_State","ThirdPartyDollars","Delivery Method","ProjectCounty","NaicsDescription","BorrState","CDC_State","ProjectState","LoanStatus","subpgmdesc","NaicsCode","InitialInterestRate")
-train_pruned_surv <- train[,!(names(train) %in% drops_surv)]
-test_pruned_surv <- test[,!(names(test) %in% drops_surv)]
-#get independent variables 
-indep_surv_vars = !(names(train_pruned_surv) %in% c("ApprovalFiscalYear", "ApprovalDate", "ChargeOffDate", "defaulted", "status", "EndDate", "YearsBeforeDefault"))
-train_surv_indep <- train_pruned_surv[,indep_surv_vars]
-test_surv_indep <- test_pruned_surv[,indep_surv_vars]
-
-train_pruned_surv$EndDate <- as.Date(train_pruned_surv$ChargeOffDate, format="%m/%d/%y")
-train_pruned_surv$status <- is.na(train_pruned_surv$EndDate)
-train_pruned_surv$EndDate[which(train_pruned_surv$status == 1)] <- as.Date('3/15/16', format="%m/%d/%y")
-
-train_pruned_surv$YearsBeforeDefault <- difftime(train_pruned_surv$EndDate,as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
-
-y <- Surv(as.numeric(train_pruned_surv$YearsBeforeDefault),train_pruned_surv$status)
-coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval, data=train_pruned_surv)
-
-fit = cv.glmnet(data.matrix(train_surv_indep), y, family="cox")
-
-coxfit1 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval, data=train_pruned_surv)
-summary(coxfit1)
-coxfit2 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS, data=train_pruned_surv)
-summary(coxfit2)
-coxfit3 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS+UnemploymentRate, data=train_pruned_surv)
-summary(coxfit3)
-coxfit4 <- coxph(Surv(as.numeric(train_pruned_surv$YearsBeforeDefault), train_pruned_surv$status)~GrossApproval+FEDFUNDS+UnemploymentRate+PublicDebt.GDP, data=train_pruned_surv)
-summary(coxfit4)
-
-
-
-
+#HousingPriceIndex,householdincome, sp500, X3month, VIX, GDP, ted , m2, indsutrial, cpi, 30 yr mortg, inflation exp.
+glm.fit <- glm(defaulted~(VIX), data = train_pruned, family = "binomial")
+glm.fit2 <- glm(defaulted~(log(VIX)), data = train_pruned, family = "binomial")
+plot(predict(glm.fit), residuals(glm.fit, type = "deviance"), col = "red")
+plot(predict(glm.fit2), residuals(glm.fit, type = "deviance"), col = "blue")
 ```
