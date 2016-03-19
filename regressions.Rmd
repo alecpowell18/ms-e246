@@ -481,17 +481,17 @@ zero_chargeoff_probs <- predict(hadZeroChargeOff, newx = data.matrix(all_glmnet_
 
 #Using lasso
 random_sample <- all_glmnet_indep[sample_indices, ]
-random_sample.probs <- predict(lasso.cv,
-                newx=data.matrix(random_sample),
-                s="lambda.1se",
-                type = "response")
+#random_sample.probs <- predict(lasso.cv,
+ #               newx=data.matrix(random_sample),
+  #              s="lambda.1se",
+   #             type = "response")
 
 #Using Cox regression
-#random_sample <-selected_surv_indep[sample_indices, ]
+random_sample_survvars <-selected_surv_indep[sample_indices, ]
 # On 1 year horizon
-#random_sample.probs <- get.default.probs(random_sample, betas, 1)
+#random_sample.probs <- get.default.probs(random_sample_survvars, betas, 1)
 # On 5 year horizon
-#random_sample.probs <- get.default.probs(random_sample, betas, 5)
+random_sample.probs <- get.default.probs(random_sample_survvars, betas, 5)
 
   
 for(i in 1:20000) {
