@@ -406,7 +406,7 @@ selected_surv_indep <- rbind(selected_train_surv_indep, selected_test_surv_indep
 
 #get vector of probabilities
 get.default.probs <- function(pool, cox_coef, t){
-  hazard <- exp(as.matrix(pool) %*% cox_coef)
+  hazard <- exp(data.matrix(pool) %*% cox_coef)
   return(1 - exp(-1 * hazard * t))
 }
 
@@ -431,10 +431,10 @@ chargeoff_test_indep <- chargeoff_test[, indepVars]
 chargeoff_train_zeros <- chargeoff_train$GrossChargeOffAmount == 0
 chargeoff_test_zeros <- chargeoff_test$GrossChargeOffAmount == 0
 
-hadZeroChargeOff <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train_zeros)
+hadZeroChargeOff <- cv.glmnet(x = data.matrix(chargeoff_train_indep), y = chargeoff_train_zeros, family = "binomial")
 train_zero_pred <- prediction(predict(hadZeroChargeOff, newx=data.matrix(chargeoff_train_indep), s="lambda.1se", type = "response"), chargeoff_train_zeros)
 train_zero_roc <- performance(train_zero_pred, measure = "tpr", x.measure = "fpr")
-plot(train_zero_roc, col = "blue")
+plot(train_zero_roc, col = "blue", main="Predicting Zero Chargeoff: \nIn-Sample (blue) and Out of Sample (red)")
 train_zero_auc <- performance(train_zero_pred, measure = "auc")
 train_zero_auc@y.values
 
@@ -486,17 +486,12 @@ random_sample.probs <- predict(lasso.cv,
                 s="lambda.1se",
                 type = "response")
 
-get.default.probs <- function(pool, cox_coef, t){
-  hazard <- exp(data.matrix(pool) %*% cox_coef)
-  return(1 - exp(-1 * hazard * t))
-}
-
 #Using Cox regression
-random_sample <-selected_surv_indep[sample_indices, ]
+#random_sample <-selected_surv_indep[sample_indices, ]
 # On 1 year horizon
 #random_sample.probs <- get.default.probs(random_sample, betas, 1)
 # On 5 year horizon
-random_sample.probs <- get.default.probs(random_sample, betas, 5)
+#random_sample.probs <- get.default.probs(random_sample, betas, 5)
 
   
 for(i in 1:20000) {
@@ -507,7 +502,7 @@ for(i in 1:20000) {
   #effectively, we're only calculating chargeoff values for loans that
   #are simulatd to have defaulted, and have a nonzero chargeoff
   sample.defaults <- random_sample[ which(random_sample.bin == TRUE & defaulted_zero_charge_bin == FALSE),]
-  defaultVector[i] <- count(random_sample.bin == TRUE)
+  defaultVector[i] <- sum(random_sample.bin == TRUE)
   
   losses <- predict(lossGivenDefault, newx=data.matrix(sample.defaults), s="lambda.1se")
   losses <- losses * sample.defaults$GrossApproval
