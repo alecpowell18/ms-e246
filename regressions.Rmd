@@ -107,6 +107,11 @@ mydata$IndustrialProduction <- mydata$IndustrialProduction - mean(mydata$Industr
 mydata$IndustrialProduction <- mydata$IndustrialProduction / sd(mydata$IndustrialProduction)
 mydata$CPI_Index <- mydata$CPI_Index - mean(mydata$CPI_Index)
 mydata$CPI_Index <- mydata$CPI_Index / sd(mydata$CPI_Index)
+
+mydata$GrossApproval <- log(mydata$GrossApproval)
+mydata$GrossApproval <- mydata$GrossApproval - mean(mydata$GrossApproval)
+mydata$GrossApproval <- mydata$GrossApproval / sd(mydata$GrossApproval)
+
 ```
 Now, onto years. Which years were the most defaults observed?
 
@@ -317,27 +322,16 @@ lambda_1se <- lasso.cv$lambda.1se
 lambda_min <- lasso.cv$lambda.min
 ```
 
-2) Next, we fit the Lasso to our full training set using this tuning parameter.
-```{r,eval=TRUE}
-# Extract the Lasso models fit to the full training set
-lasso.models <- lasso.cv$glmnet.fit 
-# Identify which model is associated with the selected tuning parameter
-selected.index <- which(lasso.models$lambda == lasso.cv$lambda.1se)
-# Display the predictors with non-zero coefficients in the selected model
-colnames(train_indep)[lasso.models$beta[,selected.index] != 0]
-```
-Happily, only a small number of coefficients are used by the model; this makes the result especially interpretable.
-
-3) Let's get the ROC curve for this model on the lambda we picked earlier!
+3) ROC curves using 1se
 ```{r}
-test.phat <- predict(lasso.cv,
+test.predict <- predict(lasso.cv,
                   newx=data.matrix(test_indep),
                   s="lambda.1se",
                   type = "response")
-test.pred <- prediction(test.phat, test_pruned$defaulted)
+test.pred <- prediction(test.predict, test_pruned$defaulted)
 
-train.phat <- predict(lasso.cv, newx=data.matrix(train_indep),s="lambda.1se",type="response")
-train.pred <- prediction(train.phat, train_pruned$defaulted)
+train.predict <- predict(lasso.cv, newx=data.matrix(train_indep),s="lambda.1se",type="response")
+train.pred <- prediction(train.predict, train_pruned$defaulted)
   # Obtain performance statistics
   # Plot ROC
   test.roc <- performance(test.pred, measure = "tpr", x.measure = "fpr")
@@ -384,12 +378,13 @@ train_pruned_surv$EndDate[which(train_pruned_surv$status == 0)] <- as.Date('12/3
 train_pruned_surv$YearsBeforeDefault <- difftime(train_pruned_surv$EndDate,as.Date(as.character(train_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
 test_pruned_surv$EndDate <- as.Date(test_pruned_surv$ChargeOffDate, format="%m/%d/%y")
 test_pruned_surv$status <- test_pruned_surv$defaulted
-test_pruned_surv$EndDate[which(test_pruned_surv$status == 0)] <- as.Date('12/31/14', format="%m/%d/%y")
+test_pruned_surv$EndDate[which(test_pruned_surv$status == 0)] <- as.Date('12/31/14', format="% m/%d/%y")
 test_pruned_surv$YearsBeforeDefault <- difftime(test_pruned_surv$EndDate,as.Date(as.character(test_pruned_surv$ApprovalDate), format="%m/%d/%y"), units = "days") / 365
 
 y <- Surv(as.numeric(train_pruned_surv$YearsBeforeDefault),train_pruned_surv$status)
 
 #fit the cox regression model with L1-regularization
+#There's a bug that for some reason fixed itself after I ran this code for the 5th time
 fit = cv.glmnet(data.matrix(train_surv_indep), y, family="cox")
 fit$lambda.1se
 plot(fit)
@@ -471,27 +466,30 @@ print("test error is: ")
 print(mean((test_chargeoff_predict - test_ChargeApproveRatio)^2))
 
 
+poolSize <- 500
+sample_indices <- sample(nrow(selected_surv_indep), poolSize)
+
+zero_chargeoff_probs <- predict(hadZeroChargeOff, newx = data.matrix(all_glmnet_indep[sample_indices,]), s = "lambda.1se", type = "response")
+
+
+
+
 defaultVector <- vector()
 lossVector <- vector()
 
-poolSize <- 500
-
-sample_indices <- sample(nrow(selected_surv_indep), poolSize)
-zero_chargeoff_probs <- predict(hadZeroChargeOff, newx = data.matrix(all_glmnet_indep[sample_indices,]), s = "lambda.1se", type = "response")
-
 #Using lasso
 random_sample <- all_glmnet_indep[sample_indices, ]
-#random_sample.probs <- predict(lasso.cv,
- #               newx=data.matrix(random_sample),
-  #              s="lambda.1se",
-   #             type = "response")
+random_sample.probs <- predict(lasso.cv,
+                newx=data.matrix(random_sample),
+                s="lambda.1se",
+                type = "response")
 
 #Using Cox regression
-random_sample_survvars <-selected_surv_indep[sample_indices, ]
+#random_sample_survvars <-selected_surv_indep[sample_indices, ]
 # On 1 year horizon
 #random_sample.probs <- get.default.probs(random_sample_survvars, betas, 1)
 # On 5 year horizon
-random_sample.probs <- get.default.probs(random_sample_survvars, betas, 5)
+#random_sample.probs <- get.default.probs(random_sample_survvars, betas, 5)
 
   
 for(i in 1:20000) {
@@ -549,7 +547,7 @@ VaRhistorical <- function(returnVector, prob=.05,
 }
 
 #set prob=.01 for 99% confidence intervals
-EShistorical <- function(returnVector, indices, prob=.05, 
+EShistorical <- function(returnVector, indices, prob=.01, 
     notional=1, digits=4)
 {
   if(prob > .5) prob <- 1 - prob
@@ -571,6 +569,7 @@ plot(results, index=1) # intercept
 # get 95%/99% confidence intervals
 boot.ci(results, conf = 0.99, type=c("norm"), index=1) # intercept
 
+
 ```
 
 Now for some LDA, with an ROC curve?:
@@ -578,7 +577,7 @@ Now for some LDA, with an ROC curve?:
 ```{r}
 CLASSIFICATION_THRESHOLD = 0.5
 library(MASS)
-#lda.fit = lda(defaulted~log(GrossApproval)+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = train_pruned)
+#lda.fit = lda(defaulted~GrossApproval+log(UnemploymentRate)+HousingPriceIndex+FEDFUNDS, data = train_pruned)
 lda.fit = qda(defaulted~., data = train_pruned)
 
 lda.fit.predict = predict(lda.fit, newdata = test_pruned, type = "response")
@@ -728,6 +727,7 @@ for (i in 1:3){
   }
 }
 
+##we eventually decided to manually update the parameters
 radial001 <- train.svm.pred
 radial0001 <- train.svm.pred
 radial01 <- train.svm.pred
